@@ -1,7 +1,7 @@
 ---
 title: "Mobile and Remote Client Protocols"
 section: "53-client-protocols"
-version: "0.1.0"
+version: "0.2.0"
 status: review
 circumvention: false
 ---
@@ -113,37 +113,111 @@ Single ASCII line containing:
 <Room Name>\t<Client Name>\r\n
 ```
 
-### 3.4 Device Sub-Page & Navigation Model (`core_model.json`)
+### 3.4 Room Hierarchy, Device Catalog & Sub-Page Navigation (`core_model.json`)
 
-To render active device remote views upon menu card selection, the client view controller relies on conventions established across vendor baseline configurations:
+Mobile applications (iOS, Android) and network touchscreens discover the physical room structure, assigned devices, button layouts, and macro bindings by retrieving `core_model.json` from `/remote/Store/updateroot/` over anonymous FTP (TCP port 21) `[CONFIRMED]`.
 
-1. **Room Menu Device ID Convention**:
-   - The room menu container (`menu_devs[].id`) and its matching references (`startup_dev`, `main_dev`) follow the formula `[INFERRED]`:
-     $$\text{menu\_dev\_id} = 20481 + \text{room\_id}$$
-   - Example: Room 0 uses `20481`; Room 1 uses `20482`. Adopting this convention aligns room navigation targets with client expectation.
+#### 3.4.1 Staged Filename Grammar & Distribution
 
-2. **Observed Device Envelope Fields**:
-   - In baseline projects, each device object under `rooms[].devices[].obj` includes `[INFERRED]`:
-     - `quick_bar`: 10-element array `[{"id": 0} .. {"id": 9}]`.
-     - `keyboard`: object `{"con_dev_id": <id>, "keyboard_id": 0}`.
-     - `hard_btns`: array of hard button mapping objects.
+- **Staged Filename Pattern:**
+  ```
+  T{TEMPLATE_ID}_A0000000000000000_C{CHKSUM}_core_model.json
+  ```
+  where `TEMPLATE_ID` is a 4-digit decimal template identifier:
+  - `0002`: Standard UI template (consumed by iPhone `ME207`, Android `ME206`, iPad `ME208`, and 7"/10" in-wall touchscreens TKP-7600 / TDC-7100) `[CONFIRMED]`.
+  - `0003`: High-resolution UI template (consumed by high-definition consoles TKP-8600 / TKP-9600) `[CONFIRMED]`.
+- **Cardinality:** Exactly one core model data structure is authored per project. It is replicated and staged under each client template identifier supported in the installation `[CONFIRMED]`.
 
-3. **Standard Page Template Categories**:
-   - Total Control Mobile view controllers instantiate fixed swipeable page templates `[INFERRED]`:
-     - `type: 4`, `name: "channel"`: Channel rockers / brightness controls (`278`, `279`, `280`).
-     - `type: 1`, `name: "numeric keypad"`: 10-key digit pad (`337`–`348`).
-     - `type: 7`, `name: "guide/menu/info/exit"`: System menu controls (`304`–`307`).
-     - `type: 2`, `name: "navigation"`: Directional D-Pad (`320`–`324`).
-     - `type: 6`, `name: "color buttons"`: Red, Green, Yellow, Blue keys (`548`–`551`).
-     - `type: 3`, `name: "transport"`: Playback controls (`288` Play, `289` Stop, `291` Pause, `292` Rew, `293` Fwd).
-     - `type: 0`, `name: "additional A"`: Custom function keys mapped to UI IDs `"A"` through `"F"` resolved via `ui_button_table.json`. Devices with further custom controls chain additional `type: 0` pages (`"additional B"` through `"additional E"`, with 8 to 11 total pages observed on TVs and cable boxes).
+#### 3.4.2 Schema Specification (`data.rooms[]`)
 
-4. **Mobile Bottom Navigation Bar Mapping**:
-   - On the mobile client interface, hard button identifiers are assigned as:
-     - `hbtn_id: 4625`: **`Main` button** (center icon) $\rightarrow$ macro `[{"type": 54, "room": <room_id>}]` (jump to room main menu) `[CONFIRMED]`.
-     - `hbtn_id: 4624`: **`Power` button** (far-right icon) $\rightarrow$ macro executing Room Power Off / state mutation `[CONFIRMED]`.
-     - `hbtn_id: 275` / `276` / `277`: Volume Up, Volume Down, and Mute `[CONFIRMED]`.
----
+The root document contains a top-level `data` dictionary with `config`, `vars`, `con_devs`, and `rooms`:
+
+```
+data
+├── config: { obj: { system_name, ... }, chk_obj: int }
+├── vars:   { obj: { items: [...] }, chk_obj: int }
+├── con_devs: [ { id: int, type: int, obj: { fav: {} } }, ... ]
+└── rooms:  [ RoomEntry, ... ]
+```
+
+Each element in `data.rooms[]` defines a physical room entity:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | Integer | Physical room identifier (0..65535). Used directly as `room_id` in TCP 51510 commands (`0x07DA`, `0x000D`, `0x0012`) and `DnData.dn` Table 10 `[CONFIRMED]`. |
+| `info` | Object | Envelope containing room presentation metadata `[CONFIRMED]`. |
+| `info.obj.name` | String | User-visible room display name (e.g. `"Living Room"`) `[CONFIRMED]`. |
+| `info.obj.room_image` | String | Path or identifier for room background photo (e.g. `"R:1.JPG"`) `[CONFIRMED]`. |
+| `info.obj.background` | String | Path or identifier for fallback chrome wallpaper (e.g. `"R:0.JPG"`) `[CONFIRMED]`. |
+| `info.obj.status_bar` | Array | 4-element array of status bar indicators `[{"idx": 0..3, "type": 0, "model_id": -1}]` `[CONFIRMED]`. |
+| `info.obj.startup_dev` | Integer | Menu device ID selected upon room activation (convention: `20481 + room_id`) `[CONFIRMED]`. |
+| `info.obj.main_dev` | Integer | Room main menu container device ID (`20481 + room_id`) `[CONFIRMED]`. |
+| `info.obj.lights_dev` | Integer | Assigned lighting device ID or `-1` if unassigned `[CONFIRMED]`. |
+| `info.obj.fav_dev` | Integer | Assigned favorites container ID or `-1` if unassigned `[CONFIRMED]`. |
+| `info.chk_obj` | Integer | Validation integrity token (e.g. `1067956892`) `[CONFIRMED]`. |
+| `menu_devs` | Object | Envelope containing main room menu tile navigation definitions `[CONFIRMED]`. |
+| `menu_devs.obj` | Array | Array of menu containers. Menu buttons MUST be padded to multiples of 6 (6 or 12 items) with hidden placeholders `{"id": -1, "name": "", "hidden": 1, "image": "", "macro": []}` `[CONFIRMED]`. |
+| `devices` | Array | Array of enveloped controlled device objects assigned to this room `[CONFIRMED]`. |
+| `scenes` | Object | Envelope (`obj: []`, `chk_obj: int`) for room automation scenes `[CONFIRMED]`. |
+
+#### 3.4.3 Device Listing & Function Discovery (`rooms[].devices[]`)
+
+Each entry in `rooms[].devices[]` encapsulates a controllable hardware endpoint:
+
+| Device Field | Type | Description |
+|---|---|---|
+| `obj.id` | Integer | **Device Identifier.** Directly equals `con_devs[].id` in `mcs.dat` and `DeviceObjTable` (Table 5) in `DnData.dn` `[CONFIRMED]`. |
+| `obj.name` | String | Display name of the device `[CONFIRMED]`. |
+| `obj.model_name` | String | Hardware model classification string `[CONFIRMED]`. |
+| `obj.device_type` | String | Device category archetype (e.g. `"DBMODEL"`) `[CONFIRMED]`. |
+| `obj.link_btn_id` | Integer | Menu button jump anchor (typically `2048 + device_index`) `[CONFIRMED]`. |
+| `obj.hard_btns` | Array | Hard button macro mappings (bottom mobile navigation bar) `[CONFIRMED]`. |
+| `obj.pages` | Array | Swipeable UI template pages (`type`, `name`, `id`, `buttons[]`) `[CONFIRMED]`. |
+| `obj.quick_bar` | Array | 10-element quick action array `[{"id": 0} .. {"id": 9}]` `[CONFIRMED]`. |
+| `obj.keyboard` | Object | Keyboard mapping descriptor `{"con_dev_id": <id>, "keyboard_id": 0}` `[CONFIRMED]`. |
+| `chk_obj` | Integer | Integrity token (`1067956892`) `[CONFIRMED]`. |
+
+#### 3.4.4 Button Macro Encoding & Discrete Function Resolution
+
+Because credential-free LAN clients cannot access `mcs.dat` (which is restricted to `/remote/Store/data/`), clients discover discrete function IDs (`funcs[].id`) by parsing the `macro` arrays in `hard_btns[]` and `pages[].buttons[]`:
+
+Every actionable button defines a macro execution step of type 33:
+```json
+"macro": [{"type": 33, "code": 131347}]
+```
+The 32-bit `code` integer packs the target device and discrete function:
+
+$$\text{code} = (\text{device\_id} \ll 16) \mid \text{func\_id}$$
+
+Clients decode the discrete function ID using bitwise masking:
+- **Target Device:** `device_id = code >> 16`
+- **Target Function:** `func_id = code & 0xFFFF`
+
+*Example:* For `code = 131347` (`0x00020113`), `device_id = 2` and `func_id = 275` (`Vol+`).
+
+#### 3.4.5 Standard Page Template Categories
+
+Total Control Mobile view controllers instantiate fixed swipeable page templates:
+- `type: 4`, `name: "channel"`: Channel rockers / brightness controls (`278`, `279`, `280`).
+- `type: 1`, `name: "numeric keypad"`: 10-key digit pad (`337`–`348`).
+- `type: 7`, `name: "guide/menu/info/exit"`: System menu controls (`304`–`307`).
+- `type: 2`, `name: "navigation"`: Directional D-Pad (`320`–`324`).
+- `type: 6`, `name: "color buttons"`: Red, Green, Yellow, Blue keys (`548`–`551`).
+- `type: 3`, `name: "transport"`: Playback controls (`288` Play, `289` Stop, `291` Pause, `292` Rew, `293` Fwd).
+- `type: 0`, `name: "additional A"`: Custom function keys mapped to UI IDs `"A"` through `"F"` resolved via `ui_button_table.json`.
+
+#### 3.4.6 Mobile Bottom Navigation Bar Mapping
+
+On mobile client interfaces, fixed hard button slots map to standardized operations:
+- `hbtn_id: 4625`: **`Main` button** (center icon) $\rightarrow$ macro `[{"type": 54, "room": <room_id>}]` (jump to room main menu) `[CONFIRMED]`.
+- `hbtn_id: 4624`: **`Power` button** (far-right icon) $\rightarrow$ macro executing Room Power Off / state mutation `[CONFIRMED]`.
+- `hbtn_id: 275` / `276` / `277`: Volume Up, Volume Down, and Mute `[CONFIRMED]`.
+
+#### 3.4.7 Minimal Room & Device Test Vector (`core_model.json`)
+
+```json
+{"data":{"config":{"obj":{"system_name":"Minimal Interop","key":"","ddns":{"domain":"","port":0},"bstation_net":"","system_net":{"dns":"192.168.1.1","dns2":"0.0.0.0","subnet":"255.255.255.0","gateway":"192.168.1.1"},"link_vol_text":"Linked Audio","file_indicator":1730548800},"chk_obj":1067956892},"vars":{"obj":{"items":[]},"chk_obj":1067956892},"con_devs":[{"obj":{"fav":{}},"id":2,"type ":0}],"rooms":[{"id":1,"info":{"obj":{"name":"Living Room","room_image":"R:1.JPG","background":"R:0.JPG","status_bar":[{"idx":0,"type":0,"model_id":-1},{"idx":1,"type":0,"model_id":-1},{"idx":2,"type":0,"model_id":-1},{"idx":3,"type":0,"model_id":-1}],"startup_dev":20482,"main_dev":20482,"lights_dev":-1,"fav_dev":-1},"chk_obj":1067956892},"menu_devs":{"obj":[{"id":20482,"name":"Main","link_btn_id":-1,"hard_btns":[{"id":-1,"hbtn_id":4625,"macro":[{"type":54,"room":1}]},{"id":-1,"hbtn_id":4624,"macro":[{"type":33,"code":196886}]}],"menu_buttons":[{"id":2049,"name":"Living Room TV","image":"1.png","macro":[{"type":33,"code":196886}]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]}]}],"chk_obj":1067956892},"devices":[{"obj":{"id":2,"name":"Living Room TV","model_name":"Living Room TV","type":0,"link_btn_id":2049,"device_type":"DBMODEL","hard_btns":[{"id":-1,"hbtn_id":275,"macro":[{"type":33,"code":131347}]},{"id":-1,"hbtn_id":276,"macro":[{"type":33,"code":131348}]},{"id":-1,"hbtn_id":277,"macro":[{"type":33,"code":131349}]},{"id":-1,"hbtn_id":4625,"macro":[{"type":54,"room":1}]},{"id":-1,"hbtn_id":4624,"macro":[{"type":33,"code":196886}]}],"pages":[{"type":4,"name":"channel","id":0,"buttons":[{"id":279,"btn_type":0,"hbtn_id":279,"name":"CH +","idx":0,"ui_id":"279","macro":[{"type":33,"code":131351}]},{"id":280,"btn_type":0,"hbtn_id":280,"name":"CH -","idx":1,"ui_id":"280","macro":[{"type":33,"code":131352}]},{"id":-1,"btn_type":0,"hbtn_id":278,"name":"","idx":2,"hidden":2,"hidden_text":1,"ui_id":"278","macro":[]}]}],"quick_bar":[{"id":0},{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},{"id":7},{"id":8},{"id":9}],"keyboard":{"con_dev_id":2,"keyboard_id":0}},"chk_obj":1067956892}],"scenes":{"obj":[],"chk_obj":1067956892}}],"camera_popups":{"obj":[],"chk_obj":1067956892},"trfzws":{"obj":[],"chk_obj":1067956892},"notifications":{"obj":[],"chk_obj":1067956892},"door_stations":{"obj":[],"chk_obj":1067956892}},"header":{"version":65536,"chksum":0,"type":"Common","firmware":0}}
+```
 
 ## 4. UI Server Protocol (TCP Port 51530)
 

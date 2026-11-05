@@ -1,7 +1,7 @@
 ---
 title: "Clean-Room Implementer Brief & Architecture Guide"
 section: "IMPLEMENTER"
-version: "0.2.0"
+version: "0.3.0"
 status: ratified
 circumvention: true
 ---
@@ -297,7 +297,7 @@ After generating the runtime files, the programmer prepares them for controller 
    - `_edit.dat.gz` files are installed to `/remote/Store/CCS/edit.dat.gz`.
    - `_FB` and `_TwoWay` tarballs are unpacked into `/remote/Store/data/`.
    - Manifests are concatenated into `/remote/Store/Prg/version.info`.
-   - **Direct Provisioning:** Staged files named `mcs.dat`, `mcs_info.dat`, `Link.dat`, `Event.dat`, and `Alarm.dat` are bypassed by the firmware staging installer. Programmers MUST provision these runtime topology and automation files directly into `/remote/Store/data/` via FTP or SFTP.
+   - **Direct Provisioning:** Staged files named `mcs.dat`, `mcs_info.dat`, `Link.dat`, `Event.dat`, and `Alarm.dat` are bypassed by the firmware staging installer. Programmers MUST provision these runtime topology and automation files directly into `/remote/Store/data/` via FTP or SFTP. Because anonymous FTP on port 21 is chrooted strictly to `/remote/Store/updateroot_anon/updateroot/`, anonymous FTP clients CANNOT access `mcs.dat` or `mcs_info.dat` in `data/`. Instead, LAN clients rely on `core_model.json` staged in `updateroot/` for room, device, and function discovery.
 
 
 ### 4.4 Cryptographic Requirements & Key Boundaries
@@ -380,9 +380,8 @@ To maintain engineering focus and strict legal compliance, the following items a
 3. **Cloud Portal & RMS Emulation:** Off-LAN dealer remote management via the vendor's SIP cloud tunnel (`urcrms.com`) is out of scope. The clean-room suite focuses exclusively on direct, local LAN control.
 4. **Decompilation of Vendor PC Software:** The implementer MUST NOT decompile or reverse-engineer the vendor's Windows software (Accelerator 3, Total Control Flex). All compiler schemas and network protocols are derived strictly from `spec/`.
 5. **Redistribution of Proprietary Assets:** The clean-room project does NOT bundle copyrighted vendor assets, including proprietary IR code databases, serial driver libraries, UI graphics, or font files. Users supply their own device codes or import open IR formats (e.g., Pronto Hex, Global Caché).
-6. **Peripheral Hardware (HDA Amplifiers):** Standalone reverse engineering of peripheral network devices (e.g. HDA-8100 amplifiers) is out of scope. Peripheral hardware is managed through the MRX controller runtime via macros (`OP_ZONE_CMD 0x35`, `OP_JSON_BROADCAST 0x39`) and monitored via controller MQTT telemetry topics (`tcsystem/global/hda/*`).
-7. **Room Model Discovery:** Room hierarchy and device mappings are defined in `core_model.json` (`data.rooms[]`) and `DnData.dn` Table 10 (`RoomObjTable`). LAN clients retrieve room metadata by downloading `core_model.json` from the controller over anonymous FTP (port 21).
-
+6. **Peripheral Hardware (HDA Amplifiers):** Standalone reverse engineering of peripheral network devices (e.g. HDA-8100 amplifiers) is out of scope. Peripheral hardware is managed through the MRX controller runtime via macros (`OP_ZONE_CMD 0x35`, `OP_JSON_BROADCAST 0x39`, `0x07DA`, or `0x07ED`) and monitored via controller MQTT telemetry topics (`tcsystem/global/hda/*`).
+7. **Room Model Discovery:** Room hierarchy and device mappings are defined in `core_model.json` (`data.rooms[]`) and `DnData.dn` Table 10 (`RoomObjTable`). LAN clients retrieve room metadata, assigned device IDs (`con_devs[].id`), and function codes by downloading `core_model.json` from the controller over anonymous FTP (port 21).
 ---
 
 ## 8. Canonical Reference: The Minimal Program

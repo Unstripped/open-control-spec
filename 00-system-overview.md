@@ -1,7 +1,7 @@
 ---
 title: "System Overview & Process Architecture"
 section: "00-system-overview"
-version: "0.2.0"
+version: "0.3.0"
 status: draft
 type: Architecture
 confidence: confirmed
@@ -360,14 +360,180 @@ The local MQTT message broker (`mosquitto`) runs as a persistent service launche
 
 - **Transport:** Standard MQTT 3.1.1 protocol listening on TCP port 1883 `[CONFIRMED]`.
 - **Authentication:** None. The default broker configuration enforces `allow_anonymous true`; clients connect anonymously without username or password `[CONFIRMED]`.
-- **Directionality & Role:** High-speed outbound publish-subscribe distribution bus. The controller engine `BS.exe` (`MosquittoMan.cpp`) operates strictly as a publisher (`DoTopicPublish`); it does not subscribe to incoming commands on TCP 1883. Publishing to MQTT topics does NOT control the controller or invoke macros `[CONFIRMED]`.
-- **QoS & Retention:** Outbound telemetry publishes with QoS 0. Transient events use retain flag `0`, while static status objects (zone volume, EQ, variable values) are published with retain flag `1` `[CONFIRMED]`.
-- **Telemetry Topics & Payloads:** Payloads are formatted as JSON text:
-  - Zone volume & mute: `tcsystem/global/room_event/zone_status` and `tcsystem/global/hda/zone` (`zone_power`, `cur_vol`, `min_vol`, `max_vol`, `mute`, `treble`, `bass`, `balance`).
-  - Room link state: `tcsystem/global/room_event/link_status` (`roomid`, `roomname`, `link_id`).
-  - System variable modifications: `tcsystem/global/variable_status` (`variable_type`, `value`).
-  - Multi-zone HDA matrix telemetry: `tcsystem/global/hda/input`, `tcsystem/global/hda/mic`, `tcsystem/global/hda/announce`, `tcsystem/global/hda/ampstatus` (`thermal`, `peaking`, `voltage`, `audiosense`).
-  - Intercom & Security: `tcsystem/global/camera_popup`, `tcsystem/enc/global/door_station_event`.
+- **Directionality & Role:** Outbound publish-subscribe telemetry distribution bus. The controller engine `BS.exe` operates strictly as an MQTT publisher (`DoTopicPublish`); it does NOT subscribe to incoming command topics on TCP 1883. Publishing to MQTT topics does NOT control the controller or invoke macros `[CONFIRMED]`.
+- **QoS & Retention Policy:**
+  - All telemetry publishes with **QoS 0** `[CONFIRMED]`.
+  - **Retain Flag = 1:** Emitted for persistent state objects (`zone_status`, `hda/zone`, `link_status`, `variable_status`). Clients subscribing to these topics immediately receive the last known state from the broker `[CONFIRMED]`.
+  - **Retain Flag = 0:** Emitted for transient events (`camera_popup`, `door_station_event`, paging announcements) `[CONFIRMED]`.
+  - **Publication Lifecycle:** `BS.exe` does not broadcast a bulk snapshot of all theoretical zones at broker launch; rather, state messages are emitted reactively as subsystems initialize, when an amplifier connects on TCP 53001, or upon any runtime state mutation `[CONFIRMED]`.
+
+#### 5.2.1 Standard Telemetry Envelope
+
+Every message published to the MQTT bus wraps its payload in a standard JSON envelope `[CONFIRMED]`:
+
+```json
+{
+  "header": {
+    "version": "0.0.0.0",
+    "seq": 104,
+    "time_stamp": 1663794348,
+    "tree": "tcsystem/global/room_event/zone_status/room_id_1"
+  },
+  "body": ...
+}
+```
+
+| Envelope Field | JSON Type | Description |
+|---|---|---|
+| `header.version` | String | Protocol version identifier (default `"0.0.0.0"` or `"1.0.0.0"`) `[CONFIRMED]`. |
+| `header.seq` | Integer | Monotonically increasing 32-bit transaction sequence number `[CONFIRMED]`. |
+| `header.time_stamp` | Integer | Unix epoch timestamp (seconds) of publication `[CONFIRMED]`. |
+| `header.tree` | String | Target MQTT topic string representing the message tree `[CONFIRMED]`. |
+| `body` | Object / Array | Telemetry payload specific to the topic category `[CONFIRMED]`. |
+
+#### 5.2.2 Topic Grammar & Body Schemas
+
+Telemetry topics append explicit hierarchical identifiers to discriminate event sources:
+
+##### 1. Room Zone Status (`tcsystem/global/room_event/zone_status/room_id_{room_id}`)
+- **Topic Grammar:** `tcsystem/global/room_event/zone_status/room_id_{room_id}` where `{room_id}` is the physical room ID (`data.rooms[].id` in `core_model.json`).
+- **Retain:** `1` (QoS 0) `[CONFIRMED]`.
+- **Body Schema:** JSON array of zone state objects:
+
+```json
+[
+  {
+    "room_id": 1,
+    "zone_power": 1,
+    "cur_vol": 45,
+    "min_vol": 0,
+    "max_vol": 100,
+    "mute": 0,
+    "fixed": 0
+  }
+]
+```
+
+| Body Field | Type | Range / Format | Description |
+|---|---|---|---|
+| `room_id` | Integer | `0` to `65535` | Physical room identifier `[CONFIRMED]`. |
+| `zone_power` | Integer | `0` or `1` | Power state: `0` = Off, `1` = On `[CONFIRMED]`. |
+| `cur_vol` | Integer | `0` to `100` | Current volume step (0–100% scale) `[CONFIRMED]`. |
+| `min_vol` | Integer | `0` to `100` | Minimum volume limit (typically `0`) `[CONFIRMED]`. |
+| `max_vol` | Integer | `0` to `100` | Maximum volume limit clamp (e.g. `80`, `90`, `100`) `[CONFIRMED]`. |
+| `mute` | Integer | `0` or `1` | Mute status: `0` = Unmuted, `1` = Muted `[CONFIRMED]`. |
+| `fixed` | Integer | `0` or `1` | Output mode: `0` = Variable volume, `1` = Fixed line output `[CONFIRMED]`. |
+
+##### 2. HDA Matrix Zone Telemetry (`tcsystem/global/hda/zone/{device_id}/{zone_idx}/`)
+- **Topic Grammar:** `tcsystem/global/hda/zone/{device_id}/{zone_idx}/` where `{device_id}` matches `con_devs[].id` in `mcs.dat` and `{zone_idx}` matches `zones[].idx` (0-based channel index). *Note: Trailing slash is REQUIRED by controller formatting* `[CONFIRMED]`.
+- **Retain:** `1` (QoS 0) `[CONFIRMED]`.
+- **Body Schema:** Single zone hardware state object:
+
+```json
+{
+  "volume": {
+    "type": "variable",
+    "min": "0",
+    "max": "100",
+    "level": "45"
+  },
+  "mute": "off",
+  "power": "on",
+  "treble": "0",
+  "bass": "0",
+  "balance": "0",
+  "lipsync": "0",
+  "thermal": "normal",
+  "peak": "not_clipping",
+  "amp": "normal",
+  "roomid": 1,
+  "roomname": "Living Room",
+  "roomindex": 0,
+  "hdaid": 3,
+  "zoneid": "z1lr"
+}
+```
+
+| Body Field | Type | Allowed Values | Description |
+|---|---|---|---|
+| `volume.type` | String | `"variable"`, `"fixed"` | Output volume mode `[CONFIRMED]`. |
+| `volume.min` | String | `"0"` to `"100"` | Minimum volume bound as string integer `[CONFIRMED]`. |
+| `volume.max` | String | `"0"` to `"100"` | Maximum volume bound as string integer `[CONFIRMED]`. |
+| `volume.level` | String | `"0"` to `"100"` | Current volume level (0–100% scale) `[CONFIRMED]`. |
+| `mute` | String | `"on"`, `"off"` | Mute status string `[CONFIRMED]`. |
+| `power` | String | `"on"`, `"off"` | Zone power status string `[CONFIRMED]`. |
+| `treble` | String | `"-10"` to `"10"` | Tone control treble offset in dB `[CONFIRMED]`. |
+| `bass` | String | `"-10"` to `"10"` | Tone control bass offset in dB `[CONFIRMED]`. |
+| `balance` | String | `"-10"` to `"10"` | L/R balance offset `[CONFIRMED]`. |
+| `lipsync` | String | `"0"` to `"250"` | Lip-sync delay in milliseconds `[CONFIRMED]`. |
+| `thermal` | String | `"normal"`, `"thermal overload"` | Thermal sensor health `[CONFIRMED]`. |
+| `peak` | String | `"not_clipping"`, `"peaking"` | Output clipping indicator `[CONFIRMED]`. |
+| `amp` | String | `"normal"`, `"error"` | Amplifier circuit status `[CONFIRMED]`. |
+| `roomid` | Integer | `uint32` | Bound physical room identifier `[CONFIRMED]`. |
+| `roomname` | String | Non-empty string | Bound physical room name `[CONFIRMED]`. |
+| `roomindex` | Integer | `0` to `23` | Zone channel index on amplifier `[CONFIRMED]`. |
+| `hdaid` | Integer | `uint32` | Amplifier hardware device ID (`con_devs[].id`) `[CONFIRMED]`. |
+| `zoneid` | String | String (e.g. `"z1lr"`) | Hardware zone port identifier `[CONFIRMED]`. |
+
+##### 3. System Variable Updates (`tcsystem/global/variable_status/variable_id_{variable_id}`)
+- **Topic Grammar:** `tcsystem/global/variable_status/variable_id_{variable_id}` where `{variable_id}` is the 32-bit state variable index (`Table 8` in `DnData.dn`) `[CONFIRMED]`.
+- **Retain:** `1` (QoS 0) `[CONFIRMED]`.
+- **Body Schema:**
+
+```json
+{
+  "variable_type": 0,
+  "value": "1"
+}
+```
+
+| Body Field | Type | Range / Format | Description |
+|---|---|---|---|
+| `variable_type` | Integer | `0`, `1`, `2` | Variable datatype: `0` = Boolean, `1` = Integer, `2` = String `[CONFIRMED]`. |
+| `value` | String | String | String representation of current variable state `[CONFIRMED]`. |
+
+##### 4. Room Link State (`tcsystem/global/room_event/link_status/link_id_{link_id}`)
+- **Topic Grammar:** `tcsystem/global/room_event/link_status/link_id_{link_id}` where `{link_id}` is the synchronized audio link group ID `[CONFIRMED]`.
+- **Retain:** `1` (QoS 0) `[CONFIRMED]`.
+- **Body Schema:**
+
+```json
+{
+  "link_id": 1,
+  "roomid": 1,
+  "roomname": "Living Room",
+  "linked_rooms": [1, 2]
+}
+```
+
+##### 5. HDA Input & Preamplifier Status (`tcsystem/global/hda/input/{device_id}/{input_idx}/`)
+- **Topic Grammar:** `tcsystem/global/hda/input/{device_id}/{input_idx}/` where `{input_idx}` is the 1-based audio input index `[CONFIRMED]`.
+- **Retain:** `0` (QoS 0) `[CONFIRMED]`.
+- **Body Schema:**
+
+```json
+{
+  "level": "0",
+  "mute": "off",
+  "peak": "not_clipping",
+  "value": "enabled",
+  "voltage": "0",
+  "phantom": {
+    "value": "disabled",
+    "voltage": "0"
+  },
+  "audiosense": "not_sensing",
+  "threshold": "0",
+  "attack": "0",
+  "ratio": "0",
+  "time": "0"
+}
+```
+
+##### 6. Intercom & Door Station Events
+- **Camera Popup:** `tcsystem/global/camera_popup` (`retain: 0`) with body containing `camera_id`, `client_id`, `popup_status` `[CONFIRMED]`.
+- **Door Station Event:** `tcsystem/enc/global/door_station_event` (`retain: 0`) carrying encrypted or tokenized intercom call events `[CONFIRMED]`.
+- **Paging Announcement:** `tcsystem/global/hda/announce/{announce_id}/` (`retain: 0`) carrying ducking activation and audio chime events `[CONFIRMED]`.
 ### 5.3 Volatile Staging & Command Descriptors (`/tmp`)
 
 The `/tmp` directory is mounted on a volatile `tmpfs` RAM disk (`/var/volatile/tmp`), ensuring that ephemeral command files do not cause flash write exhaustion on the eMMC:

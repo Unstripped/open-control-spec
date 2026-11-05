@@ -1,7 +1,7 @@
 ---
 title: "Runtime Control Protocol"
 section: "52-control-protocol"
-version: "0.2.0"
+version: "0.3.0"
 status: review
 circumvention: false
 ---
@@ -62,6 +62,22 @@ The communication model on TCP 51510 is strictly synchronous and half-duplex per
 | 0x08 | 4 | `macro_id` | uint32 LE | Action or function index: for `device_id != 0`, corresponds to the discrete function ID (`funcs[].id` in `mcs.dat` and `DeviceObjTable`); for `device_id = 0`, corresponds to the room macro ID or trigger code (`TriggerCodeTable`) `[CONFIRMED]`. |
 | 0x0C | 4 | `flags` | uint32 LE | Action flags: `0x0000` = single trigger, `0x0001` = Button Press / Macro Start, `0x0002` = Button Release / Macro Stop (ends repeating commands or volume ramps), `0x0003` = Button Hold / Repeat `[CONFIRMED]`. |
 
+#### 3.1.1 Volume Stepping, Hold-Ramping, Mute, and Source Selection Semantics
+
+When driving multi-zone audio devices or TV endpoints via `MACRO_ACTION` (`0x07DA`):
+
+1. **Volume Stepping & Ramping:**
+   - **Single Step (`flags = 0x0000` or `0x0001`):** Triggering Vol+ (function ID `275`) or Vol− (function ID `276`) adjusts `cur_vol` by **1 raw step (1%)** in standard audio profiles `[CONFIRMED]`.
+   - **Hold / Volume Ramp (`flags = 0x0003`):** While holding a volume button, clients emit repeating frames or the macro queue executes repeat intervals; standard URC touchscreen clients pace repeat emissions at approximately **100 ms intervals (~10 steps per second)** until a release frame (`flags = 0x0002`) is received, though exact repeat intervals depend on client transmission cadence and target device driver definitions `[STATIC]`.
+
+2. **Mute Control:**
+   - **Mute Toggle:** Function ID `277` toggles the mute state `[CONFIRMED]`.
+   - **Discrete Mute:** Function ID `552` forces Mute On; function ID `553` forces Mute Off `[CONFIRMED]`.
+
+3. **Audio Source Selection:**
+   - Source inputs are discrete function IDs defined under `con_devs[].db.zones[].funcs[]` in `mcs.dat` (e.g. `1001` for Input 1, `1002` for Input 2).
+   - Clients switch audio sources by issuing `0x07DA` with `device_id` set to the audio matrix device, `macro_id` set to the target input's discrete function ID, and `flags = 0x0000` `[CONFIRMED]`.
+
 - **Response Opcode:** `0x07DB`
 - **Response Payload (2 bytes):**
 
@@ -69,7 +85,25 @@ The communication model on TCP 51510 is strictly synchronous and half-duplex per
 |---|---|---|---|---|
 | 0x00 | 2 | `queue_handle` | uint16 LE | Internal action queue dispatch handle |
 
-### 3.2 Room Power Off (`0x000D`)
+### 3.2 Absolute Zone Volume & Mute Setting (`0x07ED`)
+
+- **Name:** `ACTION_AVR_SET_DRAG_VOLUME`
+- **Request Opcode:** `0x07ED`
+- **Description:** Directly sets an absolute zone volume level and mute state without incremental stepping. Emitted by slider controls and drag-volume UI elements on touchscreens and mobile applications `[CONFIRMED]`.
+- **Request Payload (19 bytes, total wire length `length = 21`):**
+
+| Offset | Size | Field | Type | Description |
+|---|---|---|---|---|
+| 0x00 | 4 | `trigger_code` | uint32 LE | Target volume trigger code packed as `(device_id << 16) | button_id`, where high 16 bits identify the target device (`device_id = trigger_code >> 16`) and low 16 bits identify the button or slider control (`button_id = trigger_code & 0xFFFF`) `[CONFIRMED]`. |
+| 0x04 | 4 | `min_value` | uint32 LE | Minimum allowable volume bound (typically `0`) `[CONFIRMED]`. |
+| 0x08 | 4 | `max_value` | uint32 LE | Maximum allowable volume clamp (e.g. `100` or dealer limit) `[CONFIRMED]`. |
+| 0x0C | 4 | `current_value` | uint32 LE | Target absolute volume level on a `0` to `100` integer scale `[CONFIRMED]`. |
+| 0x10 | 1 | `mute_status` | uint8 | Target mute state: `0x00` = Unmuted, `0x01` = Muted `[CONFIRMED]`. |
+| 0x11 | 2 | `reserved` | uint16 LE | Reserved padding bytes (must be `0x0000`) `[CONFIRMED]`. |
+
+- **Response Opcode:** `0x07DB` (Action ACK, same format as §3.1)
+
+### 3.3 Room Power Off (`0x000D`)
 
 - **Name:** `ROOMS_CMD_ROOM_POWER_OFF`
 - **Request Opcode:** `0x000D`
@@ -81,22 +115,19 @@ The communication model on TCP 51510 is strictly synchronous and half-duplex per
 
 - **Response Opcode:** `0x07DB` (Action ACK, same format as §3.1)
 
-### 3.3 House Off (`0x000E`)
-
+### 3.4 House Off (`0x000E`)
 - **Name:** `ROOMS_CMD_HOUSE_OFF`
 - **Request Opcode:** `0x000E`
 - **Request Payload:** None (`length = 2`)
 - **Response Opcode:** `0x07DB` (Action ACK, same format as §3.1)
 
-### 3.4 Room Power On (`0x0012`)
-
+### 3.5 Room Power On (`0x0012`)
 - **Name:** `ROOMS_CMD_ROOM_POWER_ON`
 - **Request Opcode:** `0x0012`
 - **Request Payload (4 bytes):** `room_id` (uint32 LE)
 - **Response Opcode:** `0x07DB` (Action ACK, same format as §3.1)
 
-### 3.5 System Variable Table Query (`0x089A`)
-
+### 3.6 System Variable Table Query (`0x089A`)
 - **Name:** `VARIABLE_CMD_GET_TABLE`
 - **Request Opcode:** `0x089A`
 - **Request Payload:** None (`length = 2`)
@@ -115,16 +146,14 @@ Each 5-byte variable status entry consists of:
 | `+0x00` | 4 | `var_id` | uint32 LE | System variable identifier `[CONFIRMED]` |
 | `+0x04` | 1 | `value` | uint8 | Current runtime value (0..255) `[CONFIRMED]` |
 
-### 3.6 Network Status Query (`0x0FE1`)
-
+### 3.7 Network Status Query (`0x0FE1`)
 - **Name:** `GET_NET_STATUS`
 - **Request Opcode:** `0x0FE1`
 - **Request Payload:** None (`length = 2`)
 - **Response Opcode:** `0xFFFD`
 - **Response Payload:** None (Status byte `0x01` indicates controller is online and ready).
 
-### 3.7 Macro Resource Type Query (`0x0FE5`)
-
+### 3.8 Macro Resource Type Query (`0x0FE5`)
 - **Name:** `GET_MACRO_COMMAND_RESOURCE_TYPE`
 - **Request Opcode:** `0x0FE5`
 - **Request Payload (10 bytes, `length = 12`):**
@@ -138,8 +167,7 @@ Each 5-byte variable status entry consists of:
 - **Response Opcode:** `0xFFFD`
 - **Response Payload:** Returns resource binding classification (e.g. standard IR, Universal Parser, DMS, HDA volume punch-through) `[CONFIRMED]`. If issued with an empty payload, returns an unpopulated status response (`00 03 00 fd ff 01`).
 
-### 3.8 Project File Timestamp & Identity Query (`0x0FE6`)
-
+### 3.9 Project File Timestamp & Identity Query (`0x0FE6`)
 - **Name:** `GET_FILE_TIME`
 - **Request Opcode:** `0x0FE6`
 - **Request Payload:** None (`length = 2`)
@@ -153,8 +181,7 @@ Each 5-byte variable status entry consists of:
 
 Clients poll `0x0FE6` to detect project deployments. While the timestamp field reports the controller's runtime clock, the 32-byte `project_token` reflects the active project database identity. When the returned project token differs from the client's locally cached token, the client invalidates its local state and retrieves updated project models.
 
-### 3.9 Client Authentication & Licensing (`0x1389`)
-
+### 3.10 Client Authentication & Licensing (`0x1389`)
 - **Name:** `CLIENT_LOGIN_REQ`
 - **Request Opcode:** `0x1389`
 - **Request Payload (13 bytes, total `length = 15`):**
@@ -210,7 +237,20 @@ Expected response (8 bytes):
 01 05 00 db 07 01 01 02
 ```
 
-### 5.3 Fragmented TCP Read (Split Frame Handling)
+
+### 5.3 Absolute Zone Volume (`ACTION_AVR_SET_DRAG_VOLUME` Volume 45%, Unmuted)
+
+Request bytes (24 bytes on wire: frame type `0x02`, length `0x0015` = 21, opcode `0x07ED`, payload 19 bytes):
+```
+02 15 00 ed 07 13 01 02 00 00 00 00 00 64 00 00 00 2d 00 00 00 00 00 00
+```
+*(Fields: trigger_code = `0x00020113` (device 2, button 275 `Vol+`), min = `0`, max = `100`, current = `45`, mute = `0`, reserved = `0x0000`).*
+Expected response (8 bytes):
+```
+01 05 00 db 07 01 01 02
+```
+
+### 5.4 Fragmented TCP Read (Split Frame Handling)
 
 When receiving framed responses over stream sockets, clients MUST handle frames split across multiple `recv()` calls.
 

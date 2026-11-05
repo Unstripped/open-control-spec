@@ -1,7 +1,7 @@
 ---
 title: Project Model Topology & Device Catalog Formats
 section: 30-project-model
-version: 0.2.0
+version: 0.3.0
 status: draft
 circumvention: false
 ---
@@ -19,15 +19,28 @@ When an open-source programming client packages and uploads an automation projec
 3. **`trf_dev_db.json` (Z-Wave Subsystem Topology):**
    Maintains runtime gateway descriptors and end-device structures for external RF/Z-Wave sub-controllers `[CONFIRMED]`.
 
-These files are transferred during project programming as staged artifacts inside `/remote/Store/updateroot/` using model- and checksum-tagged filenames, and are committed to `/remote/Store/data/` during upload activation `[CONFIRMED]`.
+### 1.1 Relationship to Physical Rooms & LAN Client Discovery (`core_model.json`)
 
-### 1.1 Relationship to Physical Rooms (`core_model.json` & `DnData.dn`)
+A critical architectural distinction exists between internal controller databases and client-facing runtime models:
 
-A critical architectural distinction exists between device channel zones and physical rooms:
-- `mcs.dat` defines **connected device hardware** and their output channel zones (`zones[].idx`, e.g. channels `0..23` of a 24-channel matrix amplifier). `mcs.dat` and `mcs_info.dat` do **not** define room entities.
-- Physical rooms (`room_id`, `room_name`, and assigned device bindings) are defined in `core_model.json` under `data.rooms[]` and compiled into `DnData.dn` Table 10 (`RoomObjTable`).
-- LAN clients and user interfaces discover room hierarchy and device assignments by reading `core_model.json` from `/remote/Store/updateroot/` over anonymous FTP (port 21). When executing room-level automation via TCP 51510 (`MACRO_ACTION` `0x07DA`), clients pass the room identifier defined in `core_model.json` `[CONFIRMED]`.
+1. **Internal Hardware Databases (`/remote/Store/data/`):**
+   `mcs.dat` and `mcs_info.dat` define connected device hardware, matrix zones (`zones[].idx`), and controller station inventory. These files reside strictly within `/remote/Store/data/`. Because the controller's anonymous FTP server (port 21) is jailed to `/remote/Store/updateroot_anon/updateroot/`, **`mcs.dat` and `mcs_info.dat` CANNOT be read over anonymous FTP by LAN clients** `[CONFIRMED]`.
 
+2. **Client-Facing Project Model (`/remote/Store/updateroot/`):**
+   Touchscreens, mobile applications, and open-source clients discover physical rooms, assigned devices, and function codes by downloading **`core_model.json`** from `updateroot/` over anonymous FTP (port 21) `[CONFIRMED]`.
+   - **Filename Pattern:** Staged as `T{TEMPLATE_ID}_A0000000000000000_C{CHKSUM}_core_model.json`, where `TEMPLATE_ID` is `0002` for standard touchscreens and mobile handsets (Android `ME206`, iPhone `ME207`, iPad `ME208`) or `0003` for high-resolution panels. Exactly one underlying project core model definition exists per project, replicated under each supported template prefix `[CONFIRMED]`.
+   - **Room Topology (`data.rooms[]`):** Physical rooms (`room_id`, `room_name`, and assigned devices) are defined under `data.rooms[]` and compiled into `DnData.dn` Table 10 (`RoomObjTable`) `[CONFIRMED]`.
+   - **Device ID Equivalence:** Every device listed under `data.rooms[].devices[]` contains an enveloped `obj.id` integer. **This ID directly equals `con_devs[].id` in `mcs.dat` and Table 5 in `DnData.dn`** `[CONFIRMED]`.
+   - **Discrete Function ID Discovery:** Every controllable button under `hard_btns[]` and `pages[].buttons[]` encapsulates its automation execution logic in a macro action object `[CONFIRMED]`:
+     ```json
+     "macro": [{"type": 33, "code": (device_id << 16) | func_id}]
+     ```
+     Clients extract the discrete function ID (`funcs[].id` in `mcs.dat`) by taking the low 16 bits:
+     $$\text{func\_id} = \text{code} \ \& \ \text{0xFFFF}$$
+     The high 16 bits (`code >> 16`) match the target `device_id`.
+
+3. **Room-Level Commands:**
+   When executing room-level automation or macros via TCP 51510 (`MACRO_ACTION` `0x07DA`, `ROOMS_CMD_ROOM_POWER_OFF` `0x000D`, `ROOMS_CMD_ROOM_POWER_ON` `0x0012`), clients pass the room identifier (`room_id`) defined in `data.rooms[].id` `[CONFIRMED]`. Passing `room_id = 0` is valid for device-level functions (`device_id != 0`); the controller automatically resolves the device's assigned room `[CONFIRMED]`.
 ---
 
 ## 2. Formatting & Serialization Constraints
@@ -203,18 +216,21 @@ The `trf_dev_db.json` file is maintained by the controller automation core to de
 
 ---
 
-## 6. Staging & Activation Workflow
+## 6. Staging & Provisioning Workflow
 
-During project deployment:
-1. The programming tool formats and writes `mcs.dat` and `mcs_info.dat` `[CONFIRMED]`.
-2. The programmer computes the 32-bit rotating checksum of each file (per `spec/20-upload-manifest.md`) `[CONFIRMED]`.
-3. The files are uploaded to `/remote/Store/updateroot/` named as:
-   - `M{MODEL}_M{MAC}0000_C{CHKSUM}_mcs.dat`
-   - `M{MODEL}_M{MAC}0000_C{CHKSUM}_mcs_info.dat`
-4. The programmer includes corresponding records in the controller's `.info` manifest `[CONFIRMED]`.
-5. Upon triggering upload activation (`END_DOWNLOAD`), the controller relocates the files to `/remote/Store/data/mcs.dat` and `/remote/Store/data/mcs_info.dat` `[CONFIRMED]`.
-6. On startup, the controller core initializes `trf_dev_db.json` in `/remote/Store/data/` `[CONFIRMED]`.
+The delivery of project models differs between runtime controller daemons and client-facing interfaces:
 
+1. **Direct Controller Provisioning (`/remote/Store/data/`):**
+   Runtime configuration files `mcs.dat`, `mcs_info.dat`, `Link.dat`, `Event.dat`, and `Alarm.dat` are provisioned directly to `/remote/Store/data/` by programming tools via administrative channels. The controller's firmware staging installer (`UpdateAndReboot` in `BS.exe`) bypasses these files; they are NOT installed from staged manifests and do NOT persist in `updateroot/` following a standard dealer deployment `[CONFIRMED]`.
+
+2. **Staged Client Distribution (`/remote/Store/updateroot/`):**
+   UI models (`core_model.json`, `model.json`, `ui_button_table.json`) and graphic archives are uploaded to `/remote/Store/updateroot/` formatted with template and checksum tokens:
+   - `T0002_A0000000000000000_C{CHKSUM}_core_model.json` (Mobile & Template 2 touchscreens)
+   - `T0003_A0000000000000000_C{CHKSUM}_core_model.json` (Template 3 high-res touchscreens)
+   These staged models persist in `updateroot/` across reboots and activations, serving as the definitive discovery mechanism for anonymous LAN clients `[CONFIRMED]`.
+
+3. **Volume Scale Standardization:**
+   All volume parameters throughout `mcs.dat` zones, `core_model.json`, control frames (`0x07ED`), and MQTT telemetry (`cur_vol`, `min_vol`, `max_vol`) use a standardized **0 to 100 integer percentage scale** (`0` = minimum/mute, `100` = full volume). `min_vol` is typically `0`, while `max_vol` establishes a dealer-configured threshold clamp (e.g. `80`, `90`, `100`) `[CONFIRMED]`.
 ---
 
 ## 7. Error Behavior
@@ -254,6 +270,11 @@ The following synthesized files constitute a valid minimal project defining 1 co
 ```
 - Expected rotating checksum: `0x0001DAEB` (`0001DAEB`) `[CONFIRMED]`.
 
+#### `core_model.json` (Minimal Room and Device Topology)
+```json
+{"data":{"config":{"obj":{"system_name":"Minimal System","key":"","ddns":{"domain":"","port":0},"bstation_net":"","system_net":{"dns":"192.168.1.1","dns2":"0.0.0.0","subnet":"255.255.255.0","gateway":"192.168.1.1"},"link_vol_text":"Linked Audio","file_indicator":1730548800},"chk_obj":1067956892},"vars":{"obj":{"items":[]},"chk_obj":1067956892},"con_devs":[{"obj":{"fav":{}},"id":2,"type ":0}],"rooms":[{"id":1,"info":{"obj":{"name":"Living Room","room_image":"R:1.JPG","background":"R:0.JPG","status_bar":[{"idx":0,"type":0,"model_id":-1},{"idx":1,"type":0,"model_id":-1},{"idx":2,"type":0,"model_id":-1},{"idx":3,"type":0,"model_id":-1}],"startup_dev":20482,"main_dev":20482,"lights_dev":-1,"fav_dev":-1},"chk_obj":1067956892},"menu_devs":{"obj":[{"id":20482,"name":"Main","link_btn_id":-1,"hard_btns":[{"id":-1,"hbtn_id":4625,"macro":[{"type":54,"room":1}]},{"id":-1,"hbtn_id":4624,"macro":[{"type":33,"code":196886}]}],"menu_buttons":[{"id":2049,"name":"Living Room TV","image":"1.png","macro":[{"type":33,"code":196886}]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]},{"id":-1,"name":"","hidden":1,"image":"","macro":[]}]}],"chk_obj":1067956892},"devices":[{"obj":{"id":2,"name":"Living Room TV","model_name":"Living Room TV","type":0,"link_btn_id":2049,"device_type":"DBMODEL","hard_btns":[{"id":-1,"hbtn_id":275,"macro":[{"type":33,"code":131347}]},{"id":-1,"hbtn_id":276,"macro":[{"type":33,"code":131348}]},{"id":-1,"hbtn_id":277,"macro":[{"type":33,"code":131349}]},{"id":-1,"hbtn_id":4625,"macro":[{"type":54,"room":1}]},{"id":-1,"hbtn_id":4624,"macro":[{"type":33,"code":196886}]}],"pages":[{"type":4,"name":"channel","id":0,"buttons":[{"id":279,"btn_type":0,"hbtn_id":279,"name":"CH +","idx":0,"ui_id":"279","macro":[{"type":33,"code":131351}]},{"id":280,"btn_type":0,"hbtn_id":280,"name":"CH -","idx":1,"ui_id":"280","macro":[{"type":33,"code":131352}]},{"id":-1,"btn_type":0,"hbtn_id":278,"name":"","idx":2,"hidden":2,"hidden_text":1,"ui_id":"278","macro":[]}]}],"quick_bar":[{"id":0},{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},{"id":7},{"id":8},{"id":9}],"keyboard":{"con_dev_id":2,"keyboard_id":0}},"chk_obj":1067956892}],"scenes":{"obj":[],"chk_obj":1067956892}}],"camera_popups":{"obj":[],"chk_obj":1067956892},"trfzws":{"obj":[],"chk_obj":1067956892},"notifications":{"obj":[],"chk_obj":1067956892},"door_stations":{"obj":[],"chk_obj":1067956892}},"header":{"version":65536,"chksum":0,"type":"Common","firmware":0}}
+```
+*(Note: In the button macros above, `131347 = (2 << 16) | 275` for device 2 Vol+, `131348 = (2 << 16) | 276` for Vol-, and `131349 = (2 << 16) | 277` for Mute).*
 ---
 
 ## 9. Open Items
