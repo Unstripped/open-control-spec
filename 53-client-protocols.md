@@ -44,7 +44,7 @@ Confidence tags follow Section 00 §4.5 (`[CONFIRMED]`, `[STATIC]`, `[INFERRED]`
    +-----------------------------------------------------------+
    | 4. Client Authentication (TCP 51510)                      |
    | - Transmit CLIENT_LOGIN_REQ (0x1389) with Client ID       |
-   | - Controller verifies seat in Table 4 (CAuthMan)          |
+   | - Controller verifies seat in Table 4                     |
    | - Receive CLIENT_LOGIN_ACK (0x138C) on authorization      |
    +-----------------------------+-----------------------------+
                                  |
@@ -162,7 +162,7 @@ When connecting to `rui_svrd.exe`:
 
 ## 5. Client Authentication & Seat Licensing (TCP Port 51510)
 
-When a mobile client connects to the automation control service on TCP 51510, it transmits `CLIENT_LOGIN_REQ` (`0x1389`) carrying its assigned Client ID. `BS.exe` (`CAuthMan`) verifies the session and returns `0x138C` (`CLIENT_LOGIN_ACK`, Status=1, AuthID=1) `[CONFIRMED]`.
+When a mobile client connects to the automation control service on TCP 51510, it transmits `CLIENT_LOGIN_REQ` (`0x1389`) carrying its assigned Client ID. `BS.exe` verifies the session against Table 4 and returns `0x138C` (`CLIENT_LOGIN_ACK`, Status=1, AuthID=1) `[CONFIRMED]`.
 (Note: While real clients also report download status to `rmslocalsvrd.exe` on TCP 51520 via opcode `0x2070` (`UPD_DOWNLOAD_STATUS`), port 51510 accepts `0x1389` login handshakes independently.)
 
 ### 5.1 `CLIENT_LOGIN_REQ` (Opcode `0x1389`)

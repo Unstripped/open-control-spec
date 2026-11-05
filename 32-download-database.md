@@ -10,7 +10,7 @@ circumvention: true
 
 The controller binary download database (`/remote/Store/data/DnData.dn`) is the compiled binary runtime database consumed by the master system automation daemon (`BS.exe`) on URC Total Control MRX processors. While `mcs.dat` and `mcs_info.dat` provide high-level JSON topology to client remotes and auxiliary daemons (`rmsmcsman.exe`, `rui_svrd.exe`), `DnData.dn` drives low-level hardware control, IR/serial command execution, zone macro execution, client license verification, and runtime encryption keys.
 
-At system startup, `CUdb::LoadDB` opens `DnData.dn` in read-only mode and loads all configuration tables into memory.
+At system startup, the automation engine (`BS.exe`) opens `DnData.dn` in read-only mode and loads all configuration tables into memory.
 
 ---
 
@@ -100,7 +100,7 @@ Protected payload blocks embedded within table records follow a standard 8-byte 
 - **Cipher:** AES-128 ECB mode.
 - **Key:** Decrypted using the controller's static content key `content-aes-static` (stored in `BS.exe` at `0x0045e7e4`).
 - **Decrypted Contents:**
-  - Bytes `0..15`: 16-byte symmetric project security key (`project-security-key`). This key is used at runtime by `CUdb::DecryptionTCLFile` to decrypt all Two-Way module scripts in `TwoWay/*.vfd/*.tcl` into `/tmp/*.vfd/*.tcl`.
+  - Bytes `0..15`: 16-byte symmetric project security key (`project-security-key`). This key is used at runtime by the module host to decrypt all Two-Way module scripts in `TwoWay/*.vfd/*.tcl` into `/tmp/*.vfd/*.tcl`.
   - Bytes `16..19`: Domain Name length (`uint32_le`).
   - Bytes `20..20+len`: Domain Name string.
   - Trailing block: Password header and password string.

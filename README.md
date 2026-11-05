@@ -241,21 +241,21 @@ A foundational principle of this project is that **no proprietary cryptographic 
 
 ---
 
-## 6. Interaction with `spec/questions.md`
+## 6. Clean-Room Inquiry & Feedback Loop
 
 When clean-room implementers encounter ambiguities, omissions, or apparent contradictions while developing software against `spec/`:
 
 1. **Logging Inquiries:**
-   - Implementers log questions into `spec/questions.md` using the standardized Question Schema.
-   - Questions MUST be framed strictly in terms of observed behavior and specification text. Implementers MUST NOT request vendor source code, decompiled routines, or dirty-room artifacts.
+   - Inquiries are logged via the project's external issue tracking channel.
+   - Questions MUST be framed strictly in terms of observed external behavior and specification text. Implementers MUST NOT request vendor source code, decompiled routines, or internal reverse-engineering artifacts.
 
 2. **Research & Synthesis:**
    - Specification authors investigate the inquiry using hardware testbenches, network captures, or protocol verification.
-   - Findings are abstracted and written strictly in clean-room normative terms.
+   - Findings are abstracted and synthesized strictly into clean-room normative terms.
 
 3. **Specification Feedback Loop:**
-   - The primary deliverable answering a question is an update to the corresponding `spec/*.md` document, with an appropriate version bump.
-   - `spec/questions.md` is updated with a concise clean summary and a reference to the resolving commit or specification revision. Answers are never communicated out-of-band.
+   - The primary deliverable answering any inquiry is an update to the corresponding `spec/*.md` document, with an appropriate version bump.
+   - Clarifications are never communicated via informal out-of-band backchannels; the published specification is the sole technical authority.
 
 ---
 

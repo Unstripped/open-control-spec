@@ -1,7 +1,7 @@
 ---
 title: Project Model Topology & Device Catalog Formats
 section: 30-project-model
-version: 0.1.0
+version: 0.2.0
 status: draft
 circumvention: false
 ---
@@ -20,6 +20,13 @@ When an open-source programming client packages and uploads an automation projec
    Maintains runtime gateway descriptors and end-device structures for external RF/Z-Wave sub-controllers `[CONFIRMED]`.
 
 These files are transferred during project programming as staged artifacts inside `/remote/Store/updateroot/` using model- and checksum-tagged filenames, and are committed to `/remote/Store/data/` during upload activation `[CONFIRMED]`.
+
+### 1.1 Relationship to Physical Rooms (`core_model.json` & `DnData.dn`)
+
+A critical architectural distinction exists between device channel zones and physical rooms:
+- `mcs.dat` defines **connected device hardware** and their output channel zones (`zones[].idx`, e.g. channels `0..23` of a 24-channel matrix amplifier). `mcs.dat` and `mcs_info.dat` do **not** define room entities.
+- Physical rooms (`room_id`, `room_name`, and assigned device bindings) are defined in `core_model.json` under `data.rooms[]` and compiled into `DnData.dn` Table 10 (`RoomObjTable`).
+- LAN clients and user interfaces discover room hierarchy and device assignments by reading `core_model.json` from `/remote/Store/updateroot/` over anonymous FTP (port 21). When executing room-level automation via TCP 51510 (`MACRO_ACTION` `0x07DA`), clients pass the room identifier defined in `core_model.json` `[CONFIRMED]`.
 
 ---
 
@@ -91,6 +98,7 @@ Common observed standard function IDs:
 - Transport: `288` (`Play`), `289` (`Stop`), `291` (`Pause`), `279` (`CH+`), `280` (`CH-`).
 - Power: `530` (`Power`), `273` (`Power On`), `274` (`Power Off`).
 - Audio EQ: `2049` (`Treble+`), `2050` (`Treble-`), `2051` (`Bass+`), `2052` (`Bass-`).
+- Source Inputs: Matrix audio source inputs are represented as discrete function descriptors (e.g. `{"id": 1001, "name": "Input 1"}`, `{"id": 1002, "name": "Input 2"}`). Selecting an audio source for a zone is executed either by triggering the corresponding input function ID via `MACRO_ACTION` (`0x07DA`) or through macro action objects `OP_DEV_CMD` (`0x21`) and `OP_ZONE_CMD` (`0x35`) `[CONFIRMED]`.
 
 ---
 

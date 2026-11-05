@@ -261,14 +261,14 @@ The controller exposes 27 distinct TCP listening ports across all network interf
 | **50257** | `0.0.0.0` | `deviceguard` | DeviceGuard secure communication channel. | **Security Exchange:** Encrypted token validation and device certificate authorization. | `[CONFIRMED]` |
 | **51200** | `0.0.0.0` | `xgated.exe` | Expansion gateway cross-connect listener. | **Multi-Controller Sync:** Synchronization channel when linking secondary expansion sub-controllers. | `[CONFIRMED]` |
 | **51510** | `0.0.0.0` | `BS.exe` / `xgated.exe` | Base station control and staging activation listener. | **Direct Programming Trigger:** Primary command port. Programmers send binary trigger frames to initiate checksum validation, manifest unpack, and runtime engine reload. | `[CONFIRMED]` |
-| **51511** | `0.0.0.0` | `BS.exe` | Secondary base station status and configuration download. | **Direct Inspection:** Programmers query runtime status, retrieve running project manifests, and download project backups. | `[CONFIRMED]` |
-| **51520** | `0.0.0.0` | `rmslocalsvrd.exe` | Local HTTP staging server for firmware and assets. | **Firmware Distribution:** Local HTTP distribution endpoint used during multi-device coordinated firmware upgrades. | `[CONFIRMED]` |
+| **51511** | `0.0.0.0` | `BS.exe` | Secondary base station control and diagnostic listener. | **Project Synchronization:** Project manifests, graphics, and database archives are synchronized via anonymous FTP (port 21) or SFTP (port 22); port 51511 serves as a legacy secondary control listener. | `[CONFIRMED]` |
+| **51520** | `0.0.0.0` | `rmslocalsvrd.exe` | Local binary staging and version query server. | **Staging Protocol:** Proprietary binary protocol endpoint (`0x2010` version query, `0x2070` pre-download) used by programming tools and mobile clients to query models and stage release packages. | `[CONFIRMED]` |
 | **51530** | `0.0.0.0` | `rui_svrd.exe` | Remote User Interface (RUI) master listener (Mode 2). | **UI Client Control:** Primary communication channel for touchscreens and mobile apps requesting UI screen definitions. | `[CONFIRMED]` |
 | **51531** | `0.0.0.0` | `rui_svrd_launcher.exe` | RUI launcher supervision and IPC channel. | **Internal IPC:** Process manager endpoint used by `rui_svrd_launcher.exe` to manage child RUI server lifecycles. | `[CONFIRMED]` |
 | **51533** | `0.0.0.0` | `rui_svrd.exe` | RUI client event and status feed socket. | **UI Event Stream:** Delivers real-time button state updates, volume feedback, and text strings to connected touchscreens. | `[CONFIRMED]` |
 | **51540** | `0.0.0.0` | `rmsmcsman.exe` | Cloud management synchronization listener. | **Cloud Sync:** Remote management client synchronization endpoint. | `[CONFIRMED]` |
-| **53000** | `0.0.0.0` | `devmngd.exe` / `snp2d.exe` | Device manager hardware status query socket. | **Hardware Query:** Queries physical I/O port configurations, IR routing assignments, and serial baud rates. | `[CONFIRMED]` |
-| **53001** | `0.0.0.0` | `devmngd.exe` / `snp2d.exe` | Device manager command dispatch socket. | **Hardware Control:** Sends direct physical commands to relays, 12V triggers, and RS-232 serial channels. | `[CONFIRMED]` |
+| **53000** | `0.0.0.0` | `devmngd.exe` / `snp2d.exe` | Device manager hardware status query socket. | **Peripheral Audio Query:** Queries peripheral audio distribution devices (HDA amplifiers) via JSON-RPC. Not a general-purpose raw I/O port for LAN clients. | `[CONFIRMED]` |
+| **53001** | `0.0.0.0` | `devmngd.exe` / `snp2d.exe` | Device manager command dispatch socket. | **Peripheral Audio Control:** Transmits JSON configuration and streaming commands to peripheral HDA amplifiers. Physical relays, sensors, and RS-232 ports on the controller are executed via programmed macros in `BS.exe`. | `[CONFIRMED]` |
 | **54211** | `0.0.0.0` | `deviceguard` | DeviceGuard internal HTTP REST API. | **Internal REST API:** Exposes endpoints `/deviceguard_api/settcroominfo` and `/deviceguard_api/updatebsinfo` used by `BS.exe`. | `[CONFIRMED]` |
 | **54215** | `0.0.0.0` | `deviceguard` | DeviceGuard auxiliary licensing port. | **License Validation:** Validates feature licenses and room seat allocations. | `[CONFIRMED]` |
 | **54216** | `0.0.0.0` | `deviceguard` | DeviceGuard certificate validation socket. | **Security Verification:** Inter-controller mutual authentication channel. | `[CONFIRMED]` |
@@ -292,15 +292,15 @@ The controller binds 17 UDP sockets for local network discovery, subsystem heart
 | **49850** | `0.0.0.0` | `snpd_mrx10.exe` | Streaming player discovery and status listener. | **Audio Discovery:** Discovers network-attached SNP streaming players on the broadcast subnet. | `[CONFIRMED]` |
 | **51535** | `0.0.0.0` | `logmanager.exe` | Application debug logging receiver and broadcast. | **Diagnostic Log Stream:** Captures formatted debug messages broadcast by secondary userland daemons. | `[CONFIRMED]` |
 | **55170** | `0.0.0.0` | `BS.exe` / `xgated.exe` | Base station peer-to-peer heartbeat beacon. | **Controller Presence:** Broadcasts alive heartbeats every 1000ms to detect duplicate master controllers or online expansion units. | `[CONFIRMED]` |
-| **57000** | `0.0.0.0` | `devmngd.exe` / `snp2d.exe` | Hardware device manager sensor broadcast socket. | **Sensor State Broadcast:** Broadcasts voltage sensor transitions (high/low edge events) and 12V trigger status. | `[CONFIRMED]` |
-| **57002** | `0.0.0.0` | `BS.exe` / `xgated.exe` | Base station macro event notification broadcast. | **Macro Feedback:** Broadcasts macro execution start, step completion, and macro end status to network clients. | `[CONFIRMED]` |
+| **57000** | `0.0.0.0` | `devmngd.exe` / `snp2d.exe` | Hardware device manager peripheral broadcast listener. | **Peripheral Listener:** Inbound subnet broadcast receiver for peripheral device announcements and voltage sensor edge events. Inner payload field layout is unratified. | `[INFERRED]` |
+| **57002** | `0.0.0.0` | `BS.exe` / `xgated.exe` | Base station macro event notification receiver. | **Macro Event Listener:** Inbound subnet broadcast listener for network macro triggers, inter-station coordination, and paging announcements. Inner payload field layout is unratified. | `[INFERRED]` |
 | **57008** | `0.0.0.0` | `rmsmcsman.exe` | RMS STUN keepalive and NAT traversal socket. | **NAT Traversal:** Transmits UDP keepalive packets to cloud STUN servers to preserve stateful firewall pinholes. | `[CONFIRMED]` |
 | **57100** | `0.0.0.0` | `devmngd.exe` | Peripheral I/O discovery and ping socket. | **Peripheral Discovery:** Broadcasts discovery probes to find network-attached serial extenders and sensor modules. | `[CONFIRMED]` |
 | **57355** | `127.0.0.1` | `BS.exe` | Internal base station loopback event channel. | **Internal Loopback:** Used internally by `BS.exe` worker threads to signal the main event loop asynchronously. | `[CONFIRMED]` |
 | **61510** | `0.0.0.0` | `provisioningd` | URC proprietary controller discovery broadcast. | **Direct Commissioning Probe:** Listens for UDP broadcast discovery frames from programming software; replies with controller model, MAC, and IP. | `[CONFIRMED]` |
 | **61520** | `0.0.0.0` | `BS.exe` / `xgated.exe` | Base station client announcement channel. | **Client Announcement:** Notifies newly connected touchscreens of the controller master identity. | `[CONFIRMED]` |
 | **61610** | `0.0.0.0` | `BS.exe` / `xgated.exe` | Sub-controller synchronization broadcast. | **Multi-Controller Sync:** Synchronizes distributed macro state and global variable tables across linked controllers. | `[CONFIRMED]` |
-| **61611** | `0.0.0.0` | `BS.exe` | Base station status heartbeat and beacon. | **System Alive Beacon:** Periodic system health beacon containing CPU load, memory utilization, and uptime metrics. | `[CONFIRMED]` |
+| **61611** | `0.0.0.0` | `BS.exe` | Base station secondary automation notification socket. | **Secondary Event Socket:** Secondary automation notification channel. Inner payload field layout is unratified. | `[INFERRED]` |
 | **61620** | `0.0.0.0` | `deviceguard` | DeviceGuard pairing discovery broadcast socket. | **Security Discovery:** Discovers compatible secure client interfaces on the local subnet. | `[CONFIRMED]` |
 
 ### 4.3 Network Security Architecture & Exposure Model
@@ -359,12 +359,15 @@ Processes utilize internal loopback sockets to execute synchronized Remote Proce
 The local MQTT message broker (`mosquitto`) runs as a persistent service launched via `/remote/App/mqttinit.sh` using configuration `/remote/Store/App/mosquitto.conf` `[CONFIRMED]`.
 
 - **Transport:** Standard MQTT 3.1.1 protocol listening on TCP port 1883 `[CONFIRMED]`.
-- **Role:** High-speed publish-subscribe distribution bus decoupling physical I/O drivers (`devmngd.exe`) from the automation engine (`BS.exe`) and user interface rendering nodes (`rui_svrd.exe`).
-- **Telemetry Categories:**
-  - Sensor input updates: Voltage sensor edge changes, contact closure events, and sensor threshold alerts.
-  - Subsystem heartbeats: Daemon status announcements, supervisor recovery notices, and memory warning thresholds.
-  - Macro execution progress: Multi-room scene transitions, volume ramp indicators, and global variable modifications.
-
+- **Authentication:** None. The default broker configuration enforces `allow_anonymous true`; clients connect anonymously without username or password `[CONFIRMED]`.
+- **Directionality & Role:** High-speed outbound publish-subscribe distribution bus. The controller engine `BS.exe` (`MosquittoMan.cpp`) operates strictly as a publisher (`DoTopicPublish`); it does not subscribe to incoming commands on TCP 1883. Publishing to MQTT topics does NOT control the controller or invoke macros `[CONFIRMED]`.
+- **QoS & Retention:** Outbound telemetry publishes with QoS 0. Transient events use retain flag `0`, while static status objects (zone volume, EQ, variable values) are published with retain flag `1` `[CONFIRMED]`.
+- **Telemetry Topics & Payloads:** Payloads are formatted as JSON text:
+  - Zone volume & mute: `tcsystem/global/room_event/zone_status` and `tcsystem/global/hda/zone` (`zone_power`, `cur_vol`, `min_vol`, `max_vol`, `mute`, `treble`, `bass`, `balance`).
+  - Room link state: `tcsystem/global/room_event/link_status` (`roomid`, `roomname`, `link_id`).
+  - System variable modifications: `tcsystem/global/variable_status` (`variable_type`, `value`).
+  - Multi-zone HDA matrix telemetry: `tcsystem/global/hda/input`, `tcsystem/global/hda/mic`, `tcsystem/global/hda/announce`, `tcsystem/global/hda/ampstatus` (`thermal`, `peaking`, `voltage`, `audiosense`).
+  - Intercom & Security: `tcsystem/global/camera_popup`, `tcsystem/enc/global/door_station_event`.
 ### 5.3 Volatile Staging & Command Descriptors (`/tmp`)
 
 The `/tmp` directory is mounted on a volatile `tmpfs` RAM disk (`/var/volatile/tmp`), ensuring that ephemeral command files do not cause flash write exhaustion on the eMMC:

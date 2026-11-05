@@ -1,7 +1,8 @@
 ---
 title: "Network Discovery Protocol (UDP 61510 & mDNS)"
-section: 50
-status: stable
+section: "50-discovery"
+version: "0.2.0"
+status: ratified
 confidence: confirmed
 circumvention: false
 ---
@@ -29,7 +30,7 @@ The programmer or client transmits a UDP broadcast packet to `255.255.255.255:61
 | `0x01` | 2 | `uint16_be` | `0xC350` | Discovery Opcode (50000) |
 | `0x03` | 2 | `uint16_le` | `0x0FFF` | Target Model ID (`0x0FFF` = wildcard / all models) |
 
-*Optional unicast routing:* If sent as 9 bytes, bytes `0x05..0x08` contain the requester's IP address.
+*Wire size:* The standard broadcast probe is exactly 5 bytes (`0x00..0x04`). An optional unicast-routed variant is 9 bytes, where bytes `0x05..0x08` contain the requester's IPv4 address `[CONFIRMED]`.
 
 ### 2.2 Discovery Response (`PACKET_FIND_ACK` / `0xC353`)
 The controller replies directly to the requester on UDP port 61510:
@@ -38,7 +39,7 @@ The controller replies directly to the requester on UDP port 61510:
 |---|---|---|---|---|
 | `0x00` | 1 | `uint8` | `seq` | Echoed transaction sequence number |
 | `0x01` | 2 | `uint16_be` | `0xC353` | Response Opcode (50003) |
-| `0x03` | 2 | `uint16_le` | `0x8000` | Hardware Model ID (MRX-15 = `0x8000`) |
+| `0x03` | 2 | `uint16_le` | `0x8008` | Hardware Model ID. MRX-15 product code is `0x8008` (matching `prov_model.ini` and package manifest prefixes `M8008_*`); `0x8000` is the generic MRX base controller family code `[CONFIRMED]`. |
 | `0x05` | 4 | `uint32_le` | `0x00000000` | Reserved / flags |
 | `0x09` | 6 | `bytes` | `00:1F:B8:00:11:22` | Controller Hardware MAC Address |
 | `0x0F` | 4 | `in_addr` | `192.168.1.100` | Current Controller IPv4 Address |
@@ -48,6 +49,7 @@ The controller replies directly to the requester on UDP port 61510:
 | `0x1F` | 32 | `string` | `MRX-15\0...` | Controller Model Name string |
 | `0x3F` | 32 | `string` | `MRX-15 Master\0...` | User Description string |
 
+*Wire size:* The response frame wire size is exactly 95 bytes (`0x5F` bytes, spanning offsets `0x00..0x5E`) `[CONFIRMED]`.
 ---
 
 ## 3. Passive mDNS Discovery (Port 5353)

@@ -1,7 +1,7 @@
 ---
 title: "Clean-Room Implementer Brief & Architecture Guide"
 section: "IMPLEMENTER"
-version: "0.1.0"
+version: "0.2.0"
 status: ratified
 circumvention: true
 ---
@@ -326,8 +326,8 @@ The **MRX LAN Deployment Engine** handles physical controller discovery, file tr
 
 ### 5.1 Stage 1: Controller Discovery
 - **Protocol:** UDP port 61510 broadcast (`spec/50-discovery.md`).
-- **Discovery Packet:** The deployer sends a 20-byte `PACKET_FIND` datagram (`0xC350`).
-- **Response Parsing:** The controller replies with an 88-byte `PACKET_FIND_ACK` datagram (`0xC353`) containing the controller's model identifier, hardware MAC address, firmware version, and IP address.
+- **Discovery Packet:** The deployer sends a 5-byte broadcast `PACKET_FIND` datagram (`0xC350`) (or 9-byte unicast-routed variant) (`spec/50-discovery.md` §2.1).
+- **Response Parsing:** The controller replies with a 95-byte `PACKET_FIND_ACK` datagram (`0xC353`) containing the controller's model identifier (`0x8008` for MRX-15), hardware MAC address, firmware version, IP address, subnet mask, gateway, DNS, and descriptive labels (`spec/50-discovery.md` §2.2).
 
 ### 5.2 Stage 2: File Transfer & Staging
 - **Protocols:** Standard FTP (TCP port 21, anonymous login `anonymous`/blank) or SFTP (TCP port 22) (`spec/51-upload-protocol.md`).
@@ -355,8 +355,8 @@ The **MRX LAN Deployment Engine** handles physical controller discovery, file tr
 The clean-room toolchain includes a diagnostic and runtime client to verify programs immediately after deployment without requiring a physical handheld remote.
 
 ### 6.1 Control Protocol (TCP Port 51510)
-- **Framing:** 5-byte header prefix (`spec/52-control-protocol.md`):
-  `0x02` + `uint16_le payload_len` + `uint16_le opcode` + `payload`
+- **Framing:** 3-byte header prefix followed by opcode and payload (`spec/52-control-protocol.md`):
+  `0x02` + `uint16_le payload_len` + `uint16_le opcode` + `payload` (total wire size = `payload_len + 3` bytes).
 - **Core Operations:**
   - **Status Query (`0x0FE1`):** Requests controller network configuration, uptime, and operational mode. Returns `0x0FE2` ACK.
   - **Variable Synchronization (`0x089A`):** Retrieves the current values of all state variables in Table 11 (`VarTable`).
@@ -380,6 +380,8 @@ To maintain engineering focus and strict legal compliance, the following items a
 3. **Cloud Portal & RMS Emulation:** Off-LAN dealer remote management via the vendor's SIP cloud tunnel (`urcrms.com`) is out of scope. The clean-room suite focuses exclusively on direct, local LAN control.
 4. **Decompilation of Vendor PC Software:** The implementer MUST NOT decompile or reverse-engineer the vendor's Windows software (Accelerator 3, Total Control Flex). All compiler schemas and network protocols are derived strictly from `spec/`.
 5. **Redistribution of Proprietary Assets:** The clean-room project does NOT bundle copyrighted vendor assets, including proprietary IR code databases, serial driver libraries, UI graphics, or font files. Users supply their own device codes or import open IR formats (e.g., Pronto Hex, Global Caché).
+6. **Peripheral Hardware (HDA Amplifiers):** Standalone reverse engineering of peripheral network devices (e.g. HDA-8100 amplifiers) is out of scope. Peripheral hardware is managed through the MRX controller runtime via macros (`OP_ZONE_CMD 0x35`, `OP_JSON_BROADCAST 0x39`) and monitored via controller MQTT telemetry topics (`tcsystem/global/hda/*`).
+7. **Room Model Discovery:** Room hierarchy and device mappings are defined in `core_model.json` (`data.rooms[]`) and `DnData.dn` Table 10 (`RoomObjTable`). LAN clients retrieve room metadata by downloading `core_model.json` from the controller over anonymous FTP (port 21).
 
 ---
 
@@ -405,25 +407,24 @@ An implementer passes the initial conformance milestone when their compiler can:
 
 ---
 
-## 9. Clean-Room Q&A Process (Filing Questions)
+## 9. Clean-Room Inquiry Process
 
-If an implementer encounters an ambiguity, contradiction, missing field definition, or unexpected controller error while developing against `spec/`, they MUST file an inquiry in:
-[`spec/questions.md`](questions.md)
+If an implementer encounters an ambiguity, contradiction, missing field definition, or unexpected controller error while developing against `spec/`, they submit a clean-room inquiry via the project's external issue tracking system.
 
 ### 9.1 Inquiry Rules
 - **Grounded in Spec Text:** Every question MUST reference a specific `spec/*.md` document, section, or table.
-- **Black-Box Framing Only:** Inquiries MUST describe observable behavior, wire captures, packet layouts, or error responses.
+- **Black-Box Framing Only:** Inquiries MUST describe observable external behavior, wire captures, packet layouts, or error responses.
 - **Prohibited Inquiries:** Implementers MUST NOT ask:
   - *"How does the vendor decompiler code implement this?"*
   - *"What are the internal C++ class names?"*
   - *"Can you provide proprietary vendor keys or certificates?"*
-- Any prohibited inquiry will be marked `Rejected`.
+- Any inquiry requesting proprietary vendor assets or source code will be rejected.
 
 ### 9.2 Resolution Flow
-1. Implementer appends a question using the schema in `spec/questions.md`.
-2. The specification team investigates the inquiry using hardware testbenches, network captures, or protocol analysis.
-3. The resolution is synthesized into clean, normative language and committed as a version bump to the relevant `spec/*.md` document.
-4. `spec/questions.md` is updated with a reference to the resolving commit.
+1. The implementer logs a structured inquiry describing the specification gap or contradiction.
+2. The specification team investigates using independent hardware testbenches, network captures, or protocol analysis.
+3. The resolution is synthesized into clean, normative RFC 2119 language and published directly as a version bump to the relevant `spec/*.md` document.
+4. The specification documents serve as the sole authoritative deliverable; no informal out-of-band guidance is provided.
 
 ---
 
@@ -448,4 +449,3 @@ Implementers should use this index to navigate the specification documents:
 | [`53-client-protocols.md`](53-client-protocols.md) | Diagnostic & Mobile Client | Mobile app sync, TCP 51520 `0x2070` pre-registration, TCP 51510 `0x1389` login. |
 | [`90-examples/minimal-program.md`](90-examples/minimal-program.md) | Golden Verification Reference | Worked minimal program derivation: complete byte streams and test vectors. |
 | [`README.md`](README.md) | Handbook & Standards | Clean-room boundaries, extraction methodology, RFC 2119 keywords, Definition of Done. |
-| [`questions.md`](questions.md) | Q&A Communication Channel | Implementer inquiry log and feedback loop. |
