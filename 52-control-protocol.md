@@ -1,7 +1,7 @@
 ---
 title: "Runtime Control Protocol"
 section: "52-control-protocol"
-version: "0.8.0"
+version: "0.9.0"
 status: review
 ---
 
@@ -140,8 +140,13 @@ Clients SHOULD take `level` from the last report in a sequence as the resulting 
 
 - **Name:** `SET_LEVEL_ABSOLUTE`
 - **Request Opcode:** `0x07ED`
-- **Description:** Sets an absolute volume level and mute state through a device's volume control `[STATIC]`.
-- **Targets:** The controller contains a volume routine that sets a level through a device's scripted two-way driver, addressed by zone index `[STATIC]`. That `0x07ED` reaches devices through this routine is a hypothesis; the path from the `0x07ED` handler to it has not been traced `[INFERRED]`. Which project elements or devices qualify is not established. Neither `core_model.json` nor the button catalog marks a trigger as accepting `0x07ED`, and no accepting trigger is known in the reference project. There, `0x07ED` with the volume-up trigger of a device page bound to the room's amplifier, and with the volume-up trigger of a device that has a two-way driver, sent no command to either device and left the amplifier's level unchanged `[CONFIRMED]`. Because the reply echoes any trigger code (below), a client cannot find an accepting trigger from the reply. Clients SHOULD use `0x07ED` only with a trigger a user has confirmed against the device, and otherwise step volume with `0x07DA` (§3.1.4).
+- **Description:** Sets an absolute volume level through a connected device's volume script `[STATIC]`.
+- **Targets:** The controller resolves `trigger_code` the same way it resolves a volume button press: it finds the user-interface object named by `object_id` (a room menu, a device object, or a module device) and follows that object's punch-through binding for `button_id` (`32-download-database` §5.3.1–§5.3.3) to a connected device, database type, zone index, and database index `[STATIC]`. If no binding resolves, or the bound connected device is not in the project, nothing is sent; the reply is unchanged (below) `[STATIC]`. Only `trigger_code` and `current_value` are used past this point: `min_value`, `max_value`, and `mute_status` are echoed but do not affect the device `[STATIC]`.
+- **Device paths:** For a resolved connected device the controller sets the level by running a project script, by one of two paths `[STATIC]`:
+  1. **Device script:** a set-volume command passed to the connected device's own two-way script, sent over the device's network or serial connection. Chosen when the device's 2-Way target and its feedback type use the same transport (both IP, or both serial), or, for a device with no 2-Way target, when its command transport is Network with IP feedback or Serial with serial feedback (`32-download-database` §5.3, Table 5). The field correspondence is `[INFERRED]` from matching value sets. A further connected-device field, not identified, must also be non-zero; when it is zero the zone volume script is used regardless `[STATIC]`.
+  2. **Zone volume script:** otherwise, a volume script addressed by the binding's zone index. It fails when the script cannot be loaded.
+
+  A device with neither script cannot be set through `0x07ED` `[INFERRED]`. In the reference project, `0x07ED` with the volume-up trigger of a device page whose room volume binding names the amplifier, and with the volume-up trigger of a device that has a two-way driver, sent no command to either device and left the amplifier's level unchanged `[CONFIRMED]`; whether those triggers resolved, and which step failed, is not established. A resolving punch-through binding is necessary, and no accepting trigger is known. `core_model.json` does not carry punch-through bindings, and the reply echoes any trigger code (below), so a client cannot confirm an accepting trigger from either. Clients SHOULD use `0x07ED` only with a trigger a user has confirmed against the device, and otherwise step volume with `0x07DA` (§3.1.4).
 - **Request Payload (19 bytes, `length = 21`):** Any other payload length is rejected with `01 03 00 FE FF 01` `[CONFIRMED]`.
 
 | Offset | Size | Field | Type | Description |
@@ -450,4 +455,4 @@ and the controller then closes the connection.
 5. **Room Audio Commands:** Successful responses, lifecycle, and the layouts of the get, balance, treble, and bass forms in §3.11. Short-form and extended-form set-volume requests naming the reference room linked to the amplifier (`room` = `2`), with and without a leading `0x00` byte, each returned `00 03 00 FE FF 02` `[CONFIRMED]`. Whether `room` uses a different numbering is not established.
 6. **Controller-to-Client Jump:** When a controller-side macro contains a page jump, the controller pushes `0x07DF` to the client. Its payload layout and delivery path are not established.
 7. **Prefix Byte Scope:** Whether opcodes other than `0x07DA` and `0x07ED` carry the §2.1.1 prefix. The §3.11 payload layouts are `[STATIC]` and have not been checked for it.
-8. **`0x07ED` Targets:** Which devices or project elements accept `0x07ED`, and how a client can identify their trigger codes (§3.2).
+8. **`0x07ED` Targets:** Which connected devices complete either script path in §3.2, and why the reference triggers sent nothing.
