@@ -1,7 +1,7 @@
 ---
 title: "System Overview & Process Architecture"
 section: "00-system-overview"
-version: "0.7.0"
+version: "0.8.0"
 status: review
 type: Architecture
 confidence: confirmed
@@ -12,6 +12,7 @@ open_items:
   - "Establish the general mapping from mcs.dat zones[].idx to the hda/zone topic slot beyond slot 0."
   - "Identify a state-query path for rooms and HDA zones unchanged since boot; MQTT retains only values published since broker start."
   - "Observe hda/zone bodies for split (mono) zones and active ducking, and non-normal hda/ampstatus values, on live hardware."
+  - "Capture variable_status bodies for Integer and String variables at controller start, and confirm that no message follows their runtime changes."
 ---
 
 # System Overview & Process Architecture
@@ -422,7 +423,12 @@ Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1
 
 ##### 3. System Variable Updates (`tcsystem/global/variable_status/variable_id_{variable_id}`)
 - **Topic Grammar:** `tcsystem/global/variable_status/variable_id_{variable_id}` where `{variable_id}` is the 32-bit state variable index (`Table 8` in `DnData.dn`) `[CONFIRMED]`.
-- **Retain:** `1` (QoS 0) `[CONFIRMED]`.
+- **Retain:** `1` (QoS 0) `[CONFIRMED]`. `header.seq` is always `0` on this topic `[STATIC]`.
+- **Publication:**
+  - At controller application start, one message for every variable in the project, of every type, whether or not its value ever changes `[STATIC]`.
+  - Afterwards, a message only when a **Boolean** variable's state changes `[STATIC]`. Runtime changes to Integer and String variables are not published on this topic or on any other channel (`52-control-protocol` §3.6.3).
+  - The controller does not republish after a broker restart, and the broker keeps no retained messages across its own restart (§5.2) `[STATIC]`. After a broker restart a Boolean variable's topic reappears at its next change, and Integer and String topics only at the next controller application start. A missing topic therefore does not mean that the variable does not exist.
+  - In a project without variables no `variable_status` message is retained `[CONFIRMED]`.
 - **Body Schema:**
 
 ```json
@@ -434,8 +440,8 @@ Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1
 
 | Body Field | Type | Range / Format | Description |
 |---|---|---|---|
-| `variable_type` | Integer | `0`, `1`, `2` | Variable datatype: `0` = Boolean, `1` = Integer, `2` = String `[CONFIRMED]`. |
-| `value` | String | String | String representation of current variable state `[CONFIRMED]`. |
+| `variable_type` | Integer | `0`, `1`, `2` | Variable datatype: `0` = Boolean, `1` = Integer, `2` = String `[CONFIRMED]`. The only client-readable source that distinguishes Integer from String (`52-control-protocol` §3.6.3) `[STATIC]`. |
+| `value` | String | Decimal text or text | Boolean: `"0"` or `"1"` `[CONFIRMED]`. Integer: unsigned decimal of the **low byte** of the initial value, at start only (for example `1000` → `"232"`, `-1` → `"255"`); clients MUST NOT treat it as the variable's numeric value `[STATIC]`. String: the initial text up to its first NUL, at start only `[STATIC]`. |
 
 ##### 4. Room Link State (`tcsystem/global/room_event/link_status/link_id_{link_id}`)
 - **Topic Grammar:** `tcsystem/global/room_event/link_status/link_id_{link_id}` where `{link_id}` is the synchronized audio link group ID `[CONFIRMED]`.
@@ -453,7 +459,7 @@ Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1
 
 ##### 5. HDA Input and Amplifier Status
 
-- **Input:** `tcsystem/global/hda/input/{hda}/{input}/`, retain `1`, QoS 0 `[CONFIRMED]`. The body is complete with exactly three string members `[STATIC]` (8 observed bodies matched `[CONFIRMED]`): `audiosense` (`"sensing_audio"` or `"not_sensing"`; only `"not_sensing"` observed live), `hdaid` (the amplifier's connected-device ID, equal to `{hda}`), and `inputport` (1-based input number, equal to `{input}`). Example: `{"audiosense":"not_sensing","hdaid":"2","inputport":"1"}`. It is published for every input on a full amplifier status refresh and for a single input when that input's status changes; never on zone changes `[STATIC]`. The richer preamplifier/microphone body listed here in earlier versions (`level`, `phantom`, `threshold`, and others) belongs to the separate topic `tcsystem/global/hda/mic/{hda}/{mic}/`, not to `hda/input` `[STATIC]`.
+- **Input:** `tcsystem/global/hda/input/{hda}/{input}/`, retain `1`, QoS 0 `[CONFIRMED]`. The body is complete with exactly three string members `[STATIC]` (8 observed bodies matched `[CONFIRMED]`): `audiosense` (`"sensing_audio"` or `"not_sensing"`; only `"not_sensing"` observed live), `hdaid` (the amplifier's connected-device ID, equal to `{hda}`), and `inputport` (1-based input number, equal to `{input}`). Example: `{"audiosense":"not_sensing","hdaid":"2","inputport":"1"}`. It is published for every input on a full amplifier status refresh and for a single input when that input's status changes; never on zone changes `[STATIC]`. The topic exists for unbound inputs too, and the body does not show whether a source device is bound to the input `[CONFIRMED]`; the bound inputs are listed by TCP 51510 `0x0130` (`52-control-protocol` §3.11.12). The richer preamplifier/microphone body listed here in earlier versions (`level`, `phantom`, `threshold`, and others) belongs to the separate topic `tcsystem/global/hda/mic/{hda}/{mic}/`, not to `hda/input` `[STATIC]`.
 - **Amplifier:** `tcsystem/global/hda/ampstatus/{hda}/{k}/`, retain `1`, QoS 0 `[CONFIRMED]`. `{hda}` is the amplifier's connected-device ID; `{k}` is 1-based, `k = slot + 1`, so `ampstatus/{hda}/{k}/` is exactly the same amplifier slot as `hda/zone/{hda}/{k-1}/` `[STATIC]`. For stereo zone *n*, `k = 2n-1` is the left (or stereo pair) channel and `k = 2n` the right channel. Body: `hdaid` (= `{hda}`), `zoneid` (= `"{k}"`), `leftthermal`/`rightthermal` (`"normal"` or `"thermal overload"`), `leftpeak`/`rightpeak` (`"normal"` or `"peaking"`). The left and right members of one message always carry the same value, because both are rendered from the same per-slot flag `[STATIC]`. Example: `{"hdaid":"2","zoneid":"1","leftpeak":"normal","leftthermal":"normal","rightpeak":"normal","rightthermal":"normal"}`.
   - Publication: only on a full amplifier status refresh (registration or reconnect), for every slot regardless of room binding; never on incremental changes `[STATIC]` (16 retained channels observed, none re-published during live zone changes `[CONFIRMED]`). It can therefore be stale.
   - Authority: for a room-bound slot, `hda/zone` `amp.thermal`/`amp.peak` carry the same state, are updated on every change, and SHOULD be preferred. `hda/ampstatus` is the only source for unbound slots, including the right half of an unsplit stereo zone, as of the last full refresh. Clients MAY consume this topic but MUST NOT require it.

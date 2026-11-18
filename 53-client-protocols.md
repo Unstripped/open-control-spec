@@ -1,7 +1,7 @@
 ---
 title: "Mobile and Remote Client Protocols"
 section: "53-client-protocols"
-version: "0.5.1"
+version: "0.5.2"
 status: review
 ---
 
@@ -184,7 +184,7 @@ Each entry in `rooms[].devices[]` encapsulates a controllable hardware endpoint:
 | `obj.keyboard` | Object | Keyboard mapping descriptor `{"con_dev_id": <id>, "keyboard_id": 0}`. Observed projects have `con_dev_id` equal to the connected device that the room object controls `[CONFIRMED]`. Clients MAY use it to map a room object to a connected device `[INFERRED]`. |
 | `chk_obj` | Integer | Integrity token (`1067956892`) `[CONFIRMED]`. |
 
-**Multi-zone amplifiers (HDA).** A multi-zone amplifier is not a room device. In observed projects, a multi-zone amplifier does not appear in any `rooms[].devices[]` or in `data.con_devs[]` `[CONFIRMED]`. A room reaches its amplifier zone through the controller's room audio routing. The room's menu hard buttons and the device pages without their own volume buttons carry `275`/`276`/`277` codes; the controller applies them to the zone linked to the room (`32-download-database` §5.3, routing descriptor and volume punch-through) `[STATIC]` (structure) / `[INFERRED]` (runtime routing; not live-tested). Amplifier source switching is not exposed as named client buttons. In the reference, input changes are steps inside the controller-side macro of each room menu tile. A client selects a source by triggering the tile's `code` `[CONFIRMED]` (macro contents) / `[INFERRED]` (that this is the only client path). For direct per-room zone volume and mute, see `52-control-protocol`.
+**Multi-zone amplifiers (HDA).** A multi-zone amplifier is not a room device. In observed projects, a multi-zone amplifier does not appear in any `rooms[].devices[]` or in `data.con_devs[]` `[CONFIRMED]`. A room reaches its amplifier zone through the controller's room audio routing. The room's menu hard buttons and the device pages without their own volume buttons carry `275`/`276`/`277` codes; the controller applies them to the zone linked to the room (`32-download-database` §5.3, routing descriptor and volume punch-through) `[STATIC]` (structure) / `[INFERRED]` (runtime routing; not live-tested). Amplifier source switching is not exposed as named client buttons. In the reference, input changes are steps inside the controller-side macro of each room menu tile, and a client can select a source by triggering the tile's `code` `[CONFIRMED]` (macro contents). A client can also route an input directly with `0x0132`; `core_model.json` does not say which amplifier inputs have a bound source, and the controller lists them in reply to `0x0130` (`52-control-protocol` §3.11.8, §3.11.12) `[CONFIRMED]`. For direct per-room zone volume and mute, see `52-control-protocol`.
 
 #### 3.4.4 Macro Steps & Button Code Encoding
 

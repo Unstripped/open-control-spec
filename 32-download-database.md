@@ -1,6 +1,6 @@
 ---
 title: Controller Binary Download Database (DnData.dn)
-version: "0.5.1"
+version: "0.6.0"
 status: draft
 ---
 
@@ -64,8 +64,8 @@ The database contains 26 recognized table indices:
 | 5 | 3,948 | connected-device table | Controlled AV and automation hardware devices | 8 |
 | 6 | 94,531 | stream-routing table | DMS digital audio streaming source routing | 7,169 |
 | 7 | 94,587 | system-info flag | System info flag / state byte | 0 |
-| 8 | 94,588 | integer-variable table | User integer variables | 0 |
-| 9 | 94,596 | boolean-variable table | User boolean variables | 0 |
+| 8 | 94,588 | integer-variable table | User variables of all types: Boolean, Integer, String (§5.0) | 0 |
+| 9 | 94,596 | boolean-variable table | List of the Boolean variable IDs (§5.0.3) | 0 |
 | 10 | 94,604 | room table | Physical room/zone definitions and macro bindings | 3 |
 | 11 | 114,134 | sensor-trigger table | Sensor threshold trigger rules | 0 |
 | 12 | 114,142 | trigger-code table | Macro trigger event code mapping table | 234 |
@@ -117,7 +117,7 @@ Tables without active records serialize in one of two standardized forms:
 
 ### 5.0 Table 8: Integer-Variable Table
 
-Table 8 contains user-defined runtime integer and boolean variables accessible via macro operations and runtime query opcode `0x089A`:
+Table 8 contains the user-defined runtime variables of every type (Boolean, Integer, String), accessible via macro operations. The controller reads Tables 8 and 9 once, when its control application starts; a project change takes effect on variables only through that restart `[STATIC]`. Clients read Boolean variables only (`52-control-protocol` §3.6):
 
 #### 5.0.1 Table Header
 | Offset | Size | Type | Description |
@@ -140,6 +140,18 @@ Each variable record consists of an 8-byte record header followed by variable pa
 | var | 4 | `int32_le` | Maximum allowed value (`max_val`) |
 | var | 2 | `uint16_le` | Variable name byte length $L_{name}$ |
 | var | $L_{name}$ | `string` | Variable name string (ASCII) |
+
+A record whose payload size field is `0` is skipped `[STATIC]`. Boolean values are stored in one byte and Integer values as 4-byte little-endian signed integers `[STATIC]`. Generators MUST use $L_{val} = 1$ with initial value `0` or `1` for Boolean variables and $L_{val} = 4$ for Integer variables, and MUST NOT emit a record whose size field is `0` `[STATIC]`.
+
+#### 5.0.3 Table 9: Boolean-Variable List
+
+| Offset | Size | Type | Description |
+|---|---|---|---|
+| `+0x00` | 4 | `uint32_le` | Table byte length (excluding this 4-byte field) |
+| `+0x04` | 4 | `uint32_le` | Count $N_b$ |
+| `+0x08` | $4 \times N_b$ | `uint32_le[]` | Variable IDs |
+
+The controller uses $N_b$ as the record count of its `0x089A` reply (`52-control-protocol` §3.6) `[STATIC]`; no use of the ID list itself has been found. Generators MUST list exactly the Table 8 variables of type `0` (Boolean), in Table 8 order, so that $N_b$ equals the number of Boolean variables `[INFERRED]` (order).
 
 
 ## 5. Table Framing & Structural Semantics

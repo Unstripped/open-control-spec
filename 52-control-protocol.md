@@ -1,7 +1,7 @@
 ---
 title: "Runtime Control Protocol"
 section: "52-control-protocol"
-version: "0.10.0"
+version: "0.11.0"
 status: review
 ---
 
@@ -259,21 +259,73 @@ With both counts zero the body is 8 bytes (`resp_length = 0x000B`). Rooms 0, 1, 
 ### 3.6 System Variable Table Query (`0x089A`)
 - **Name:** `VARIABLE_TABLE_QUERY`
 - **Request Opcode:** `0x089A`
-- **Request Payload:** None (`length = 2`)
-- **Response Opcode:** `0x0898`
-- **Response Payload ($4 + 5 \times N$ bytes):**
+- **Request Payload:** None (`length = 2`). A `prefix` byte `0x00` (`length = 3`) is accepted and gives the same reply `[CONFIRMED]`.
+- **Response Opcode:** `0x0898`, `status = 0x01`
+- **Response Payload ($4 + 5 \times k$ bytes):**
 
 | Offset | Size | Field | Type | Description |
 |---|---|---|---|---|
-| 0x00 | 4 | `count` | uint32 LE | Number of variable status records returned ($N$) `[CONFIRMED]` |
-| 0x04 | $5 \times N$ | `entries` | record[$N$] | Array of 5-byte variable status records `[CONFIRMED]` |
+| 0x00 | 4 | `count` | uint32 LE | Number of Boolean variables the project declares (see below) `[CONFIRMED]` |
+| 0x04 | $5 \times k$ | `entries` | record[$k$] | 5-byte variable status records `[CONFIRMED]` |
 
 Each 5-byte variable status entry consists of:
 
 | Offset | Size | Field | Type | Description |
 |---|---|---|---|---|
-| `+0x00` | 4 | `var_id` | uint32 LE | System variable identifier `[CONFIRMED]` |
-| `+0x04` | 1 | `value` | uint8 | Current runtime value (0..255) `[CONFIRMED]` |
+| `+0x00` | 4 | `var_id` | uint32 LE | Variable ID (the `n` of MQTT `variable_id_{n}`) `[CONFIRMED]` |
+| `+0x04` | 1 | `value` | uint8 | Boolean state `[CONFIRMED]` |
+
+- **Boolean variables only:** the reply lists the project's Boolean (type `0`, `32-download-database` §5.0.2) variables, in the project's variable-table order. Integer and String variables never appear `[STATIC]`. A `var_id` listed here is therefore Boolean; the reply carries no type field.
+- **Count:** `count` is taken from the project's Boolean-variable list (`32-download-database` §5.0.3), and the controller stops after `count` records or at the end of its Boolean variables, whichever comes first, so $k \le$ `count` `[STATIC]`. In a correctly generated project the two agree. Clients MUST bound parsing by the frame length, not by `count` alone.
+- **Value:** `0` or `1` once the variable has been set at runtime `[CONFIRMED]`. Before the first runtime set it is the first byte of the variable's initial value as stored in the project, which the controller does not range-check `[STATIC]`. Clients SHOULD treat any non-zero value as true.
+- **Example (no Boolean variables):** `02 02 00 9A 08` → `00 07 00 98 08 01 00 00 00 00` `[CONFIRMED]`.
+
+#### 3.6.1 Variable Values Query (`0x089B`)
+
+- **Name:** `VARIABLE_VALUES_QUERY`
+- **Request Payload (`length = 7 + 4 × count`):**
+
+| Offset | Size | Field | Type | Description | Confidence |
+|---|---|---|---|---|---|
+| 0x00 | 1 | `prefix` | uint8 | `0x00` (§2.1.1). Without it, the controller reads `count` one byte late | `[CONFIRMED]` |
+| 0x01 | 4 | `count` | uint32 LE | Number of IDs that follow | `[CONFIRMED]` |
+| 0x05 | 4 × `count` | `var_ids` | uint32 LE array | Variable IDs to read | `[CONFIRMED]` |
+
+  The controller does not check `count` against the frame length; clients MUST send exactly `count` IDs `[STATIC]`.
+- **Response:** `status = 0x01`. Body: `count` echoed (uint32 LE), then one 5-byte record (`var_id` uint32 LE, `value` uint8, as in §3.6) per requested ID, in request order `[STATIC]`.
+- **Response opcode:** `0x0898` when every requested ID names a Boolean variable `[STATIC]`. Otherwise `0x0899`: the controller stops at the first ID that is unknown **or not Boolean**, and the body holds only the records for the IDs before it `[CONFIRMED]` (unknown ID) / `[STATIC]` (not Boolean). Clients MUST NOT read `0x0899` as "unknown ID" alone.
+- **Connection Effect:** Terminal (§4 rule 3) `[CONFIRMED]`.
+- **Examples:**
+
+| Request | Reply | Meaning |
+|---|---|---|
+| `02 07 00 9B 08 00 00 00 00 00` | `00 07 00 98 08 01 00 00 00 00` | `count = 0` `[CONFIRMED]` |
+| `02 0B 00 9B 08 00 01 00 00 00 01 00 00 00` | `00 07 00 99 08 01 01 00 00 00` | ID `1` unknown or not Boolean; no records `[CONFIRMED]` |
+| `02 0F 00 9B 08 00 02 00 00 00 01 00 00 00 02 00 00 00` | `00 07 00 99 08 01 02 00 00 00` | Stops at the first ID; no records `[CONFIRMED]` |
+
+#### 3.6.2 Boolean Variable Change Notification (UDP `0x089D`)
+
+When a Boolean variable's state changes at runtime, the controller sends an 11-byte UDP datagram to multicast group `239.255.95.91`, port `49950` `[STATIC]`:
+
+| Offset | Size | Field | Value |
+|---|---|---|---|
+| 0x00 | 3 | header | `00 08 00` (`length = 8`) |
+| 0x03 | 2 | `opcode` | `0x089D` (`9D 08`) |
+| 0x05 | 1 | `status` | `0x01` |
+| 0x06 | 4 | `var_id` | uint32 LE |
+| 0x0A | 1 | `value` | `0` or `1` |
+
+Each change is sent twice, about 10 ms apart. Nothing is sent at startup, when a set leaves the state unchanged, or for Integer and String variables `[STATIC]`. Opcode `0x089C` is never sent `[STATIC]`. Clients MAY join the group and MUST tolerate duplicates. No datagram has been captured live.
+
+#### 3.6.3 Reading Variables: Summary
+
+| Variable type | Type known from | Current value readable from |
+|---|---|---|
+| Boolean (`0`) | Listed by `0x089A`; `0x0898` reply to `0x089B`; MQTT `variable_type` | `0x089A`, `0x089B`, `0x089D`, MQTT `variable_status` (`00-system-overview` §5.2.2 item 3) |
+| Integer (`1`) | MQTT `variable_type` only | Not readable. MQTT carries only the low byte of the initial value, published at controller start; runtime changes are reported on no channel `[STATIC]` |
+| String (`2`) | MQTT `variable_type` only | Initial value only, from MQTT at controller start; runtime changes are reported on no channel `[STATIC]` |
+
+No TCP 51510 request and no staged client file distinguishes an Integer from a String variable `[STATIC]`. When the retained MQTT message is missing (`00-system-overview` §5.2.2 item 3), a client can only tell Boolean (listed by `0x089A`) from not Boolean or unknown.
 
 ### 3.7 Network Status Query (`0x0FE1`)
 - **Name:** `NETWORK_STATUS_QUERY`
@@ -493,7 +545,8 @@ The amplifier is named by `hda_id`, its connected-device ID (`mcs.dat` `con_devs
 | 0x0E + 36i | 32 | `zone_id` | char[32] | ASCII, NUL-padded | Zone-ID string of target *i* (§3.11.2) | `[CONFIRMED]` |
 
 - **Amplifier command:** the zone is switched on and routed to the input in one command: `"input":"<input name>.<source MAC>","power":"on"`, where `<source MAC>` is the source amplifier's MAC address and `<input name>` is lower case, for example `in1` `[CONFIRMED]`.
-- **Unusable input ports:** for an input port that has no source device bound in the project, the controller sent an empty input name. The amplifier did not answer and left the zone unchanged, and the controller still returned `01 03 00 2C 01 01` after about 2 s `[CONFIRMED]`. That the input name is taken from the project's bound sources is `[INFERRED]`. Clients MUST select only input ports that have a source device bound in the project, and SHOULD verify the result.
+- **Unusable input ports:** for an input port that has no source device bound in the project, the controller sends the amplifier an empty input name. The amplifier does not answer and leaves the zone unchanged, and the controller still returns `01 03 00 2C 01 01` after about 2 s `[CONFIRMED]`. The input name is set only for inputs that have a bound source `[STATIC]`. An `input_port` beyond the amplifier's input list, or an unknown `source_hda_id`, produces the failure reply `[STATIC]`.
+- **Finding the bound ports:** `0x0130` (§3.11.12) lists every bound input of every amplifier `[CONFIRMED]`. Clients MUST send `0x0132` only with a (`source_hda_id`, `input_port`) pair that appears in a `0x0130` reply read since the last project change, and SHOULD verify the result from zone telemetry. MQTT `hda/input` topics exist for unbound inputs too, with the same body, and MUST NOT be used to decide whether an input is bound `[CONFIRMED]`.
 - **Replies:** §3.11.1.
 
 #### 3.11.9 Amplifier JSON Pass-Through (`0x012E`)
@@ -530,7 +583,46 @@ Clients MUST NOT use these opcodes for amplifier zones.
 | One step up or down | `0x00A2` with `control = 2` or `3`; otherwise `0x012E` with `"volume":"+"` or `"-"` |
 | Mute | `0x0098` by zone-output index, or `0x014A` by slot; `0x00A2`, `0x0006`, or `0x007E` for a room's audio zone |
 | Power | `0x0142` |
-| Source | `0x0132` |
+| Source | `0x0132`, with an input listed by `0x0130` |
+
+#### 3.11.12 Amplifier Input List (`0x0130`)
+
+- **Name:** `AMP_INPUT_LIST_QUERY`
+- **Request Payload:** none (`length = 2`). The controller ignores any payload bytes and needs no `prefix` byte `[CONFIRMED]`.
+- **Response:** `resp_opcode = 0x0131`, `status = 0x01`, body below `[CONFIRMED]`. The failure opcode `0x012D` is not caused by any request content `[STATIC]`.
+
+| Offset | Size | Field | Type | Description | Confidence |
+|---|---|---|---|---|---|
+| 0x00 | 4 | `count` | uint32 LE | Number of records that follow | `[CONFIRMED]` |
+| 0x04 + 69i | 4 | `hda_id` | uint32 LE | Connected-device ID of the amplifier that owns the input | `[CONFIRMED]` |
+| 0x08 + 69i | 1 | `input_port` | uint8 | 1-based input position on that amplifier, in the numbering used by `0x0132` `input_port` | `[CONFIRMED]` (analog) / `[STATIC]` (built-in) |
+| 0x09 + 69i | 64 | `name` | char[64] | Name of the source device bound to the input, NUL-padded. Empty when the name is 64 bytes or longer | `[CONFIRMED]` |
+
+- **Content:** one record for each input, on every amplifier in the project, that has a source device bound in the project; an unbound input has no record `[CONFIRMED]`. Records follow project order: amplifier by amplifier, then input by input `[STATIC]`. A built-in (microphone) input is listed with the microphone's name `[STATIC]`.
+- **Lifecycle:** as §3.11.1. Clients SHOULD re-read the list after a project change.
+
+#### 3.11.13 Amplifier Input Detail (`0x013B`)
+
+- **Name:** `AMP_INPUT_DETAIL_QUERY`
+- **Request Payload:** none (`length = 2`) `[CONFIRMED]`.
+- **Response:** `resp_opcode = 0x013C`, `status = 0x01`. The body is `count` (uint32 LE) followed by `count` records of 142 bytes `[CONFIRMED]`:
+
+| Offset | Size | Field | Type | Description | Confidence |
+|---|---|---|---|---|---|
+| 0x00 | 32 | `source_name` | char[32] | Name of the bound source device | `[CONFIRMED]` |
+| 0x20 | 32 | `amp_name` | char[32] | Amplifier name | `[CONFIRMED]` |
+| 0x40 | 32 | `port_label` | char[32] | `Input <n>` for an analog input; `Balanced Input Left` / `Balanced Input Right` for built-in inputs | `[CONFIRMED]` (analog) / `[STATIC]` (built-in) |
+| 0x60 | 6 | `amp_mac` | uint8[6] | Amplifier MAC address | `[CONFIRMED]` |
+| 0x66 | 1 | `builtin` | uint8 | `0` analog input, `1` built-in input | `[CONFIRMED]` (`0`) / `[STATIC]` (`1`) |
+| 0x67 | 1 | `port` | uint8 | 1-based position within its kind (analog or built-in) | `[CONFIRMED]` (analog) |
+| 0x68 | 4 | `hda_id` | uint32 LE | Amplifier connected-device ID | `[CONFIRMED]` |
+| 0x6C | 32 | `input_type` | char[32] | Input type text, for example `Unbalanced Analog RCA` | `[CONFIRMED]` |
+| 0x8C | 1 | `stereo` | uint8 | Stereo mode; `1` observed, other values not established | `[CONFIRMED]` (`1`) |
+| 0x8D | 1 | `sensing` | uint8 | Sensing option; `0` observed, other values not established | `[CONFIRMED]` (`0`) |
+
+- **Content:** analog inputs without a bound source are omitted; built-in inputs are always listed `[STATIC]`. String fields are NUL-padded and MAY fill all 32 bytes with no terminator; longer names are truncated `[STATIC]`. Text that the controller learns from the amplifier (such as `input_type`) MAY be empty while the amplifier is offline `[INFERRED]`.
+- **Port numbering:** `port` counts within its kind, so it is not the `0x0132` `input_port` for a built-in input or for an amplifier that has built-in inputs. Clients MUST take `0x0132` port numbers from `0x0130` `[STATIC]`.
+- **Lifecycle:** as §3.11.1.
 
 ---
 
@@ -538,7 +630,7 @@ Clients MUST NOT use these opcodes for amplifier zones.
 
 1. **First Request Deadline:** The controller waits up to 10,000 ms after accepting a connection for the first request. If none arrives, it sends `01 03 00 FE FF 01` and closes the connection about 3 s later `[CONFIRMED]`.
 2. **One Request at a Time:** Clients MUST consume every response frame for a request (§2.2) before issuing a subsequent request on a reusable connection.
-3. **Terminal Commands:** After its final response frame to `MACRO_TRIGGER` (`0x07DA`), `SET_LEVEL_ABSOLUTE` (`0x07ED`), `HOUSE_OFF` (`0x000E`), `POWER_MENU_QUERY` (`0x0012`), `NETWORK_STATUS_QUERY` (`0x0FE1`), or `VARIABLE_TABLE_QUERY` (`0x089A`), the controller waits up to 10,000 ms and then closes the socket `[CONFIRMED]`. `ROOM_POWER_OFF` (`0x000D`) and the §3.11 commands follow the same path `[STATIC]`. If the client sends another frame during that wait, those bytes are consumed and discarded, and the controller closes the connection without a response `[CONFIRMED]`. Clients MUST open a new connection for the next request, and SHOULD close their side as soon as the final response frame is read rather than waiting for the controller.
+3. **Terminal Commands:** After its final response frame to `MACRO_TRIGGER` (`0x07DA`), `SET_LEVEL_ABSOLUTE` (`0x07ED`), `HOUSE_OFF` (`0x000E`), `POWER_MENU_QUERY` (`0x0012`), `NETWORK_STATUS_QUERY` (`0x0FE1`), `VARIABLE_TABLE_QUERY` (`0x089A`), or `VARIABLE_VALUES_QUERY` (`0x089B`), the controller waits up to 10,000 ms and then closes the socket `[CONFIRMED]`. `ROOM_POWER_OFF` (`0x000D`) and the §3.11.3–§3.11.9 commands follow the same path `[STATIC]`. If the client sends another frame during that wait, those bytes are consumed and discarded, and the controller closes the connection without a response `[CONFIRMED]`. Clients MUST open a new connection for the next request, and SHOULD close their side as soon as the final response frame is read rather than waiting for the controller.
 4. **Portable Client Rule:** Unless an opcode is explicitly documented here as reusable, clients MUST treat each request/response transaction as terminal and reconnect for the next request.
 5. **Reusable Query and Idle Connections:** `CONTROLLER_TIME_QUERY` (`0x0FE6`) returns without closing the socket. Further requests MAY follow after its complete response `[CONFIRMED]`. There is no idle limit after it: a connection left idle for 1801 s after `0x0FE6` remained open and answered another `0x0FE6`, and the controller sent nothing during the idle time `[CONFIRMED]`. The controller sets no TCP keepalive on port 51510 sockets, so it never detects a peer that disappears without FIN or RST; such a connection, and its address registration (rule 10), persist `[STATIC]`. The only idle-close rule on this port (about 60 s) applies to a programmer version opcode outside this specification `[STATIC]`. Because an open connection blocks every new connection from the same address (rule 10), clients SHOULD close idle connections themselves as soon as they no longer need them, and MUST close a `0x0FE6` connection before issuing a request on another connection.
 6. **Accept Serialization and Capacity:** The controller accepts one connection at a time. It reads no request from the next connection until the current one has sent its first request, or has reached the first-request deadline (rule 1) and been closed, about 13 s after it connected `[CONFIRMED]`. Other clients' TCP handshakes complete in the meantime (listen backlog of 64), but their requests wait. A rejected connection (rule 10) whose client closes at once does not delay others `[CONFIRMED]`. At most 64 distinct client addresses can be registered at once; a first request from a further address is answered as in rule 10 `[STATIC]`. Connecting a new client does not disconnect another client `[CONFIRMED]`. Clients MUST send their request immediately after connecting.
@@ -554,7 +646,7 @@ Clients MUST NOT use these opcodes for amplifier zones.
     | `0x000D`, `0x000E` | Just before `0x000F` | `[STATIC]` |
     | `0x0FE1`, `0x089A` | Just before the reply | `[STATIC]` |
     | `0x0FE6`, unrecognized opcodes | The connection closes | `[CONFIRMED]` (`0x0FE6`) / `[STATIC]` (unrecognized) |
-    | Other opcodes in this specification (`0x0012`, `0x0FE5`, `0x1389`, §3.11) | Not established; clients MUST assume until the connection closes | — |
+    | Other opcodes in this specification (`0x0012`, `0x089B`, `0x0FE5`, `0x1389`, §3.11) | Not established; clients MUST assume until the connection closes | — |
 
     Closing a connection early does not cancel its action or release the address: after a client closed right after `0x07DB`, requests from its address were rejected until the action ended `[CONFIRMED]`. A rejection window therefore has no fixed length; it lasts for the remaining run time of the other connection's action, or for as long as another connection from the address stays open. Connections from other addresses are not affected `[STATIC]`; this has not been tested with a second client host. Clients behind one NAT address share one registration `[INFERRED]`.
 11. **Client Connection Strategy:**
@@ -792,6 +884,20 @@ C: client -> controller: 02 02 00 E1 0F
 C: controller -> client: 00 03 00 FD FF 01
 ```
 
+### 5.17 Amplifier Input List (`0x0130`)
+
+One amplifier (`hda_id = 7`) with a source named `Source` bound to input 1 and no other bound inputs:
+```text
+client -> controller: 02 02 00 30 01
+controller -> client: 01 4C 00 31 01 01
+                      01 00 00 00                 count = 1
+                      07 00 00 00                 hda_id = 7
+                      01                          input_port = 1
+                      53 6F 75 72 63 65           "Source"
+                      00 × 58                     NUL padding to 64 bytes
+```
+`resp_length = 0x004C` = 2 (opcode) + 1 (status) + 4 + 69. Inputs 2–8 have no record, so `0x0132` MUST NOT be sent for them.
+
 ---
 
 ## 6. Open Items
@@ -804,4 +910,6 @@ C: controller -> client: 00 03 00 FD FF 01
 6. **Room Audio Forms:** The get, balance, treble, and bass forms and `0x0011` in §3.11.10; `0x0144` live behaviour; whether `mcs.dat` `zones[].idx` equals the zone-output index (§3.11.2).
 7. **`0x07ED` Acceptance:** No device has been observed to accept `0x07ED`; both device paths in §3.2 step 2 are `[STATIC]`.
 8. **Controller-to-Client Jump:** When a controller-side macro contains a page jump, the controller pushes `0x07DF` to the client. Its payload layout and delivery path are not established.
-9. **Prefix Byte Scope:** Whether opcodes other than `0x07DA`, `0x07ED`, and §3.11.3–§3.11.9 carry the §2.1.1 prefix.
+9. **Prefix Byte Scope:** Whether opcodes other than `0x07DA`, `0x07ED`, `0x089B`, and §3.11.3–§3.11.9 carry the §2.1.1 prefix. `0x089A`, `0x0130`, and `0x013B` ignore payload bytes.
+10. **Amplifier Inputs:** Built-in (microphone) inputs in `0x0130` and `0x013B`, record order across several amplifiers, and the `stereo` and `sensing` values beyond `1` and `0` (§3.11.12, §3.11.13). The reference project has one amplifier and no microphone.
+11. **Variables with Values:** A `0x089B` `0x0898` reply, the `0x089D` datagram, and the `variable_status` bodies for Integer and String variables have not been captured; the reference project declares no variables. Also not established: behaviour when the Boolean-variable list count differs from the number of Boolean variables, variable types above `2`, and the largest accepted `0x089B` `count` (§3.6).
