@@ -1,7 +1,7 @@
 ---
 title: "Network Discovery Protocol (UDP 61510 & mDNS)"
 section: "50-discovery"
-version: "0.5.0"
+version: "0.6.0"
 status: review
 confidence: confirmed
 ---
@@ -54,12 +54,12 @@ The response does not contain netmask, gateway, DNS, firmware version, or 32-byt
 
 #### 2.2.1 Text Fields
 
-Both text fields are raw byte strings copied verbatim from controller configuration text. The controller performs no character-set conversion and declares no encoding `[STATIC]`. Unused bytes are `0x00`.
+Both text fields are opaque byte strings copied verbatim from controller configuration text. The controller stores, truncates, and returns them without any character-set conversion and defines no encoding; bytes `0x80`–`0xFF` are returned exactly as last stored `[STATIC]`. Unused bytes are `0x00`. Truncation counts bytes, not characters, so a value cut at the field limit can end in an incomplete multibyte sequence `[STATIC]`.
 
 - **Model name** (`0x2D`): the remainder of the controller's model-name configuration line, including its line terminator. The verified controller sends `MRX-15` followed by `0x0A` and three `0x00` bytes `[CONFIRMED]`. The controller copies a name only when it is at most 9 bytes including the terminator, so a copied name is always followed by at least one `0x00` `[STATIC]`; field contents for a longer configured name are not established.
-- **Description** (`0x0F`): the first line of the controller's stored description, at most 30 bytes `[STATIC]`. If that line is shorter than 30 bytes and ends with a newline, the `0x0A` is included; a 30-byte description fills the field with no `0x00` terminator `[STATIC]`. An unset description is all `0x00` `[CONFIRMED]`.
+- **Description** (`0x0F`): the first line of the controller's stored description, at most 30 bytes `[STATIC]`. If that line is shorter than 30 bytes and ends with a newline, the `0x0A` is included; a 30-byte description fills the field with no `0x00` terminator `[STATIC]`. A description set over the network ends at the first `0x00` byte of the supplied value, and only its first line (through the first `0x0A`) is reported `[STATIC]`. An unset description is all `0x00` `[CONFIRMED]`.
 
-Clients MUST read each field up to its first `0x00` byte or the end of the field, and MUST then remove trailing `0x0A`, `0x0D`, and ASCII whitespace. Observed values are ASCII `[CONFIRMED]`. The encoding of bytes `0x80`–`0xFF` is not established; clients SHOULD decode them as UTF-8 with replacement of invalid sequences and MAY preserve the raw bytes for display or comparison `[INFERRED]`.
+Clients MUST read each field up to its first `0x00` byte or the end of the field, and MUST then remove trailing `0x0A`, `0x0D`, and ASCII whitespace. All observed and built-in values are ASCII `[CONFIRMED]`. Clients SHOULD decode both fields as UTF-8, replacing invalid or truncated sequences, and SHOULD preserve the raw bytes for comparison or re-transmission. Clients that write a description SHOULD encode it as UTF-8 and SHOULD NOT split a multibyte character at the 30-byte limit. UTF-8 is a client convention, not a controller property.
 
 ### 2.3 Response Routing
 

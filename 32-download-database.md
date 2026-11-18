@@ -1,6 +1,6 @@
 ---
 title: Controller Binary Download Database (DnData.dn)
-version: "0.4.0"
+version: "0.5.1"
 status: draft
 ---
 
@@ -254,7 +254,7 @@ Under DB structure types `0` and `1`:
 | `+0x17` | $L$ | `bytes` | Command body (IR code, serial string, or IP payload such as a JSON template) | confirmed |
 | `+0x17+L` | 1 | `uint8` | Is-macro flag. If non-zero, a `uint32_le` step count $N$ and $N \times 8$ bytes of steps follow | confirmed |
 
-The controller reads the repeat and ramp fields when it looks up a command to send (static). How they set the number of sends during a held button press is not established (`52-control-protocol` §3.1.4). In the reference, the `OP_DEV_CMD` macro step (§5.4.2) repeats the target command's repeat count, ramp start, and ramp speed as `uint32_le` values at offsets `+27`, `+31`, and `+35`, counted from the step's `0x21` opcode byte (confirmed by comparison across four devices).
+The controller reads the repeat and ramp fields when it looks up a command to send (static). During a held press it sends the command once immediately, then repeats it after the ramp-start interval and at ramp-speed intervals while the button is held; the hold ends on any client byte or after a fixed 1000 ms (`52-control-protocol` §3.1.4). In the reference, the `OP_DEV_CMD` macro step (§5.4.2) repeats the target command's repeat count, ramp start, and ramp speed as `uint32_le` values at offsets `+27`, `+31`, and `+35`, counted from the step's `0x21` opcode byte (confirmed by comparison across four devices).
 
 ---
 
@@ -270,13 +270,13 @@ Each room record starts with an 8-byte entry header followed by physical room me
 | `+0x0E` | $L_{name}$ | `string` | Room name (null-terminated ASCII, e.g. `Living Room\0`) | confirmed |
 | $+0$ | 1 | `uint8` | Room is hidden flag (`0` = visible on UI clients, `1` = hidden / utility zone) | confirmed |
 | $+1$ | 1 | `uint8` | Room flag byte (`0x00` observed) | confirmed |
-| $+2$ | 12 | `uint8[12]` | AVR / DMS zone routing descriptor: enable link (uint8), DMS/AVR ID (uint32), flag (uint8), AVR input index (uint8), DMS condev ID (uint32), DMS output index (uint8). In the reference installation the room linked to the 24-zone amplifier stores `01 02000000 00 00 FFFFFFFF 00`: link enabled, DMS/AVR ID = connected device `2`. Rooms without a link store `00 FFFFFFFF 00 00 FFFFFFFF 00`. Which of the two index bytes selects the amplifier zone is **unresolved**, because both are `0` in the reference | confirmed (layout) |
+| $+2$ | 12 | `uint8[12]` | AVR / DMS zone routing descriptor: enable link (uint8), DMS/AVR ID (uint32), zone index (uint8), AVR input index (uint8), DMS condev ID (uint32), DMS output index (uint8). The zone index is the amplifier's zone-output index (the same 0-based index used by Table 5 zone-output lists and `OP_DEV_CMD` zone bindings); a room-level volume or mute request is routed to that zone of the linked device `[STATIC]`. In the reference installation the room linked to the 24-zone amplifier stores `01 02000000 00 00 FFFFFFFF 00`: link enabled, DMS/AVR ID = connected device `2`, zone index `0` | confirmed (layout) / static (zone index) |
 | $+14$ | variable | `record` | Music activity table: 4-byte size, 4-byte count, 11-byte records | confirmed |
 | $+0$ | variable | `record` | Connected device ID table: 4-byte size, 4-byte count $N_{dev}$, followed by $N_{dev} \times 4$ bytes of assigned device IDs | confirmed |
 | $+0$ | variable | `record` | Room menu (see §5.3.1) | confirmed |
 | $+0$ | variable | `record` | Device-object table (see §5.3.2) | confirmed |
 | $+0$ | variable | `record` | Module-device table: 4-byte size, 4-byte count, 50-byte records | confirmed |
-| $+0$ | variable | `record` | Room Power On button record: 4-byte action count followed by macro actions | confirmed |
+| $+0$ | variable | `record` | Room power-on button record: 4-byte action count followed by macro actions | confirmed |
 | $+0$ | variable | `record` | Room Power Off button record: 4-byte action count followed by macro actions | confirmed |
 | $+0$ | variable | `record` | Room Command Table: 4-byte size, 4-byte count, 8-byte command mappings | confirmed |
 | $+0$ | variable | `record` | Room Alarm Table: 4-byte size, 4-byte count, alarm schedule descriptors | confirmed |
@@ -360,6 +360,8 @@ Automation macros and UI button actions are encoded as sequences of variable-len
 | `OP_ROOM_OFF` | `0x36` | 11 | Room power-off step: sub-type (`uint8`, `0x00` observed), room ID (`uint32_le`), then `uint32_le` `0xFFFFFFFF` (meaning unresolved). Example: `36 00 01000000 FFFFFFFF` turns room 1 off `[CONFIRMED]` (layout). The same opcode is `core_model.json` step type `54` (`{"type": 54, "room": <id>}`) `[STATIC]`. |
 | `OP_VAR_STATE` | `0x37` | 11 | Variable / room power state mutation: sub-op `0x00` (`uint8`), variable ID (`uint32_le`), new value (`uint32_le`). Wire payload is 10 bytes (`37 00 <var_id u32> <val u32>`). |
 | `OP_JSON_BROADCAST`| `0x39` | Variable | JSON broadcast command step: flags, string length (`uint32_le`), JSON string payload (e.g. `{"type":"set","zone":{"id":"all","ctrl":{"power":"off"}}}`). |
+
+**Default-jump destinations (`OP_JUMP` type 0).** The option byte selects: `0` = return to the current/last device, `1`/`2` = previous/next page, `3`/`4` = previous/next navigation page, `5`/`6` = previous/next device, `7` = room main menu, `8` = room list `[STATIC]`. Values above `8` are undefined; the controller does not interpret them, and a client MUST treat them as a no-op and continue with the next step `[STATIC]`. The reference database contains no type-0 `OP_JUMP` records `[CONFIRMED]`. Type-4 special-screen codes are a separate value space (see `53-client-protocols` §3.4.4).
 
 ---
 

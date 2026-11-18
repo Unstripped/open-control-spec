@@ -1,7 +1,7 @@
 ---
 title: "System Overview & Process Architecture"
 section: "00-system-overview"
-version: "0.6.0"
+version: "0.7.0"
 status: review
 type: Architecture
 confidence: confirmed
@@ -9,9 +9,9 @@ open_items:
   - "Empirically decode the binary serialization structure of /tmp/dobj_*.cmd dynamic UI command files."
   - "Map full JSON request/response schema for DeviceGuard REST endpoints on 127.0.0.1:54211."
   - "Verify trigger packet layout for on-demand socket activation daemon svc_exam on TCP port 22222."
-  - "Determine whether MQTT header.seq is ever non-zero; every observed publish carried seq 0."
+  - "Establish the general mapping from mcs.dat zones[].idx to the hda/zone topic slot beyond slot 0."
   - "Identify a state-query path for rooms and HDA zones unchanged since boot; MQTT retains only values published since broker start."
-  - "Resolve hda/zone roomindex semantics and the mapping between hda/ampstatus zone numbers and hda/zone zone components."
+  - "Observe hda/zone bodies for split (mono) zones and active ducking, and non-normal hda/ampstatus values, on live hardware."
 ---
 
 # System Overview & Process Architecture
@@ -337,7 +337,7 @@ Every message published to the MQTT bus wraps its payload in a standard JSON env
 | Envelope Field | JSON Type | Description |
 |---|---|---|
 | `header.version` | String | Observed `"0.0.0.0"` on every observed message `[CONFIRMED]`; no other value has been observed. |
-| `header.seq` | Integer | Observed as `0` on every observed message, including startup publishes and runtime-change publishes days later; it is not a monotonically increasing counter in observed traffic. Whether it is ever non-zero is unresolved. Clients MUST accept `0` and MUST NOT rely on it for ordering or deduplication `[CONFIRMED]`. |
+| `header.seq` | Integer | **Not a sequence number** `[STATIC]`. The reference firmware holds one publisher-wide value that is `0` from controller start-up and is never incremented. After a camera-popup event it MAY carry a non-zero, timestamp-like value (that event's start time, local-time epoch seconds) on every topic until the next such event or a restart `[STATIC]`; only `0` has been observed live `[CONFIRMED]`. Retained messages keep the value they were published with. Implementations MUST accept any integer. Clients MUST NOT use `seq` for ordering, deduplication, or gap detection. |
 | `header.time_stamp` | Integer | Publication time in seconds. Observed values were offset from the controller's UTC system clock by its local timezone offset, i.e. local wall-clock time encoded as seconds since 1970. Clients MUST NOT assume true UTC `[CONFIRMED]`. |
 | `header.tree` | String | Target MQTT topic string representing the message tree `[CONFIRMED]`. |
 | `body` | Object | Telemetry payload specific to the topic category; every observed body was one JSON object `[CONFIRMED]`. |
@@ -349,13 +349,13 @@ Telemetry topics append explicit hierarchical identifiers to discriminate event 
 ##### 1. Room Zone Status (`tcsystem/global/room_event/zone_status/room_id_{room_id}`)
 - **Topic Grammar:** `tcsystem/global/room_event/zone_status/room_id_{room_id}` where `{room_id}` is the physical room ID (`data.rooms[].id` in `core_model.json`).
 - **Retain:** `1` (QoS 0) `[CONFIRMED]`.
-- **Body Schema:** A single JSON object was observed, with room identity in the topic and no `room_id` field in the body:
+- **Body Schema:** Always a single JSON object with exactly six integer members; the room is identified only by the topic. There is no `room_id` body field and the body is never an array `[STATIC]` (7 observed bodies all matched `[CONFIRMED]`):
 
 ```json
 {"zone_power": 1, "cur_vol": 45, "min_vol": 0, "max_vol": 100, "mute": 0, "fixed": 0}
 ```
 
-Clients MUST NOT require an array or a `room_id` body field. Other variants have not been ruled out.
+Clients MUST NOT expect an array or a `room_id` field on this topic. When more than one amplifier zone is bound to the same room (for example both halves of a split stereo zone), each zone's change publishes its own single object to the same topic and the most recent publish replaces the retained value (last write wins) `[STATIC]`.
 
 | Body Field | Type | Range / Format | Description |
 |---|---|---|---|
@@ -363,14 +363,15 @@ Clients MUST NOT require an array or a `room_id` body field. Other variants have
 | `zone_power` | Integer | `0` or `1` | Power state: `0` = Off, `1` = On `[CONFIRMED]`. |
 | `cur_vol` | Integer | Device-dependent | Current volume value; units and general range are not established `[CONFIRMED]`. |
 | `min_vol` | Integer | Device-dependent | Minimum volume bound; units and general range are not established `[CONFIRMED]`. |
-| `max_vol` | Integer | Device-dependent | Maximum volume bound; units and general range are not established `[CONFIRMED]`. |
+| `max_vol` | Integer | Device-dependent | Maximum volume bound. For an HDA-backed room this is the amplifier's reported configured maximum, which can differ from `hda/zone` `volume.max` (always `"100"`) `[STATIC]`. |
 | `mute` | Integer | `0` or `1` | Mute status: `0` = Unmuted, `1` = Muted `[CONFIRMED]`. |
-| `fixed` | Integer | `0` or `1` | Output mode: `0` = Variable volume, `1` = Fixed line output `[CONFIRMED]`. |
+| `fixed` | Integer | `0` observed | Raw amplifier output-type value: `0` = Variable volume, non-zero = fixed output. Only `0` has been observed; values greater than `1` are not excluded `[STATIC]`. |
 
 ##### 2. HDA Matrix Zone Telemetry (`tcsystem/global/hda/zone/{hda}/{zone}/`)
-- **Topic Grammar:** `tcsystem/global/hda/zone/{hda}/{zone}/`; the trailing slash was present in the observed topic. In the one observed topic `hda/zone/2/0/`, `{hda}` equaled the HDA amplifier's `con_devs[].id` (`2`) in `mcs.dat` and `{zone}` was `0`, which is the first `zones[].idx` of that amplifier; the body `zoneid` was `"z1lr"`. A general mapping is not established beyond this observation.
-- **Retain:** A retained QoS 0 message was observed.
-- **Body Schema:** The observed body is one object. Example with synthetic labels:
+- **Topic Grammar:** `tcsystem/global/hda/zone/{hda}/{zone}/` (trailing slash present) `[CONFIRMED]`. `{hda}` is the amplifier's connected-device ID (`con_devs[].id` in `mcs.dat`) `[STATIC]`. `{zone}` is a 0-based controller slot: for stereo zone *n* (1-based) of the amplifier, slot `2(n-1)` carries `z<n>lr` (unsplit) or `z<n>l` (split left half), and slot `2(n-1)+1` carries `z<n>r` (split right half only) `[STATIC]`. An HDA-8100 therefore has 16 slots.
+- **Topic slot vs `zones[].idx`:** The topic slot is a controller slot, not `mcs.dat` `zones[].idx` by definition. In the one observation, slot `0` / `z1lr` coincided with `zones[].idx` `0`; the mapping from `zones[].idx` to slot beyond that case is not established, and clients MUST NOT derive one. Clients MUST identify the amplifier channel by body `zoneid`, not by `{zone}` or `zones[].idx`.
+- **Publication:** Retain `1`, QoS 0 `[CONFIRMED]`. A slot is published only while it is bound to a room and the amplifier is online; the right slot of an unsplit stereo zone is an unbound placeholder and is never published `[STATIC]`.
+- **Body Schema:** One object; every scalar is a JSON string, including identifiers and numbers `[CONFIRMED]`. Example with synthetic labels:
 
 ```json
 {
@@ -385,18 +386,39 @@ Clients MUST NOT require an array or a `room_id` body field. Other variants have
 }
 ```
 
-In the observed topic `hda/zone/2/0/`, `roomindex` was `"2"`, not `0`; it equaled the body `roomid` and the bound room's `data.rooms[].id`. Clients MUST NOT equate the topic zone component with `roomindex`; the meaning of `roomindex` is unresolved. `hdaid` equaled the topic `{hda}` and the amplifier's `con_devs[].id` in the observation, but clients MUST NOT assume that equality generally. Every scalar in the observed body was a JSON string, including identifiers. Additional fields and other representations MAY occur.
-
-| Body Field | Type | Allowed Values | Description |
+| Body Field | Presence | Allowed Values | Description |
 |---|---|---|---|
-| `volume.type` | String | `"variable"`, `"fixed"` | Output volume mode `[CONFIRMED]`. |
-| `volume.min`, `volume.max`, `volume.level` | String | Numeric text | Observed bounds and level; units and all supported ranges remain unverified. |
-| `mute`, `power` | String | `"on"`, `"off"` observed | Observed state. |
-| `amp.thermal`, `amp.peak` | String | `"normal"` observed | Amplifier health indicators nested under `amp`. |
-| `roomid`, `roomindex`, `hdaid`, `zoneid` | String | Text | Identifiers in the observed body; their full mapping is unresolved. |
-| Other fields | Various | See example | Clients SHOULD tolerate additional fields and unknown values. |
+| `amp.thermal` | Always | `"normal"`, `"thermal overload"` | Amplifier thermal protection state for this slot `[STATIC]`. |
+| `amp.peak` | Always | `"normal"`, `"peaking"` | Amplifier clip/peak state for this slot `[STATIC]`. |
+| `balance`, `bass`, `treble` | Always | Signed decimal integer text | Tone settings `[STATIC]`. |
+| `lipsync` | Always | Unsigned decimal text | Lip-sync delay setting `[STATIC]`. |
+| `ducking.status` | Always | `"on"`, `"off"` | Whether a ducking event is active on this zone `[STATIC]`. |
+| `ducking.mute` | Only when `ducking.status` is `"on"` | `"on"`, `"off"` | Whether ducking mutes the zone `[STATIC]`. |
+| `ducking.eventid` | Only when `ducking.status` is `"on"` | Decimal integer text | Ducking event ID `[STATIC]`. |
+| `ducking.inputname` | Only when `ducking.status` is `"on"` and the event is found in the project | Text | Name of the ducking event's input `[STATIC]`. |
+| `eq` | Only when the EQ preset is known | `"Off"`, `"Music"`, `"Voice"`, `"Gaming"`, or the custom name | EQ preset; the custom preset is reported by its `eqcustomname`. Omitted for an unknown preset `[STATIC]`. |
+| `eqcustomname` | Always | Text (default `"Custom"`) | Name of the custom EQ preset `[STATIC]`. |
+| `hdaid` | Always | Decimal text | Equals the topic `{hda}` `[STATIC]`. |
+| `mute`, `power` | Always | `"on"`, `"off"` | Mute and power state `[STATIC]`. |
+| `roomid` | Always | Decimal text | Bound room's ID (`data.rooms[].id`); the same value as the `zone_status` topic `room_id` `[STATIC]`. |
+| `roomname` | Always | Text | Bound room's name `[STATIC]`. |
+| `roomindex` | Always | Decimal text | 0-based position of the bound room in the project's room list. It equals `roomid` only when room IDs are consecutive from 0, as in the observed project `[STATIC]`. Clients MUST NOT equate it with `{zone}` or `roomid`. |
+| `stereo` | Always | `"stereo"`, `"mono"` | `"stereo"` = unsplit zone, `"mono"` = split zone half `[STATIC]`. |
+| `volume.level` | Always | Decimal text | Current volume (`0`–`100` observed) `[STATIC]`. |
+| `volume.max`, `volume.min` | Always | `"100"`, `"0"` | Constants; not the amplifier's configured limits `[STATIC]`. |
+| `volume.type` | Always | `"variable"`, `"fixed"` | Output volume mode `[STATIC]`. |
+| `zoneid` | Always | `z<n>lr`, `z<n>l`, `z<n>r` | Amplifier channel identity, generated from the project's split configuration; authoritative zone identity `[STATIC]`. |
+| `inputdevname`, `inputhdaid`, `inputhdaport` | Conditional | See below | Zone audio source `[STATIC]`. |
 
-For a room whose audio is an HDA zone, one runtime change produced both `room_event/zone_status/room_id_2` and `hda/zone/2/0/` with the same `header.time_stamp` and corresponding values (`cur_vol` `81` / `volume.level` `"81"`, power on, unmuted) `[CONFIRMED]`. They are two views of the same change: `zone_status` is the room-level view keyed by room ID; `hda/zone` adds amplifier-zone detail (tone, source, room binding, amplifier health). Clients modelling rooms SHOULD use `zone_status`; clients needing amplifier-zone detail SHOULD use `hda/zone`. No precedence rule is specified, and this does not establish that both are always published or synchronized. Treat each as a potentially stale observation.
+Source fields depend on the zone's source type `[STATIC]`:
+- **Amplifier analog input *n*:** `inputdevname` is the name of the device the project binds to that input; `inputhdaid` is the connected-device ID of the amplifier owning the input; `inputhdaport` is *n*. The pair names the source topic `hda/input/{inputhdaid}/{inputhdaport}/`. All three are omitted if the lookup fails.
+- **Microphone:** `inputdevname` is the microphone name, `inputhdaid` and `inputhdaport` the microphone's amplifier and port; omitted if the lookup fails.
+- **Chime *n*:** `inputhdaid` (this amplifier) and `inputhdaport` (*n*) are always present; `inputdevname` is the sound name, present only if found.
+- **None or unrecognised:** none of the three fields.
+
+Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1"` `[CONFIRMED]`. Split (`"mono"`) and ducking-active bodies have not been observed live. Clients SHOULD tolerate additional fields.
+
+**`zone_status` vs `hda/zone`.** For a room whose audio is an HDA zone, both topics are rendered from the same amplifier-zone record; neither is a separate data source `[STATIC]`. On an incremental zone change the controller publishes `hda/zone` first and then `zone_status`, normally with the same `header.time_stamp` `[CONFIRMED]`; `zone_status` is re-published on any zone change, including tone-only changes, even when its own fields are unchanged `[CONFIRMED]`. They are not always co-published: on a full amplifier status refresh (amplifier registration or reconnect) the controller publishes `hda/zone` for every room-bound slot and does not publish `zone_status`; conversely `zone_status` is also published for rooms whose audio is not an HDA zone, where no `hda/zone` exists `[STATIC]`. Clients SHOULD treat `hda/zone` as authoritative for an HDA-backed room and use `zone_status` for rooms without an HDA zone. `zone_status.max_vol` reflects the amplifier's configured maximum, whereas `hda/zone` `volume.max` is always `"100"` and `volume.min` always `"0"`. Treat each as a potentially stale observation.
 
 ##### 3. System Variable Updates (`tcsystem/global/variable_status/variable_id_{variable_id}`)
 - **Topic Grammar:** `tcsystem/global/variable_status/variable_id_{variable_id}` where `{variable_id}` is the 32-bit state variable index (`Table 8` in `DnData.dn`) `[CONFIRMED]`.
@@ -431,8 +453,10 @@ For a room whose audio is an HDA zone, one runtime change produced both `room_ev
 
 ##### 5. HDA Input and Amplifier Status
 
-- **Input:** `tcsystem/global/hda/input/{hda}/{input}/` was received retained at QoS 0 for inputs `1`–`8`, published at startup. Its observed body contained only three strings, for example `{"audiosense":"not_sensing","hdaid":"2","inputport":"1"}`; `inputport` equaled the topic `{input}`. The preamplifier fields listed for this topic in earlier versions (`level`, `phantom`, `threshold`, and others) were not observed on it. Other variants are not excluded.
-- **Amplifier:** `tcsystem/global/hda/ampstatus/{hda}/{zone}/` was received retained at QoS 0 for `{zone}` `1`–`16` on a 24-zone amplifier, published at startup. The observed body contained strings, for example `{"hdaid":"2","zoneid":"1","leftpeak":"normal","leftthermal":"normal","rightpeak":"normal","rightthermal":"normal"}`; `zoneid` equaled the topic `{zone}`. The controller publishes this topic, so clients MAY consume it but MUST NOT require it. The mapping between its `{zone}` numbers and `hda/zone` zone components is unresolved; clients MUST NOT assume `ampstatus zone = hda/zone zone + 1`.
+- **Input:** `tcsystem/global/hda/input/{hda}/{input}/`, retain `1`, QoS 0 `[CONFIRMED]`. The body is complete with exactly three string members `[STATIC]` (8 observed bodies matched `[CONFIRMED]`): `audiosense` (`"sensing_audio"` or `"not_sensing"`; only `"not_sensing"` observed live), `hdaid` (the amplifier's connected-device ID, equal to `{hda}`), and `inputport` (1-based input number, equal to `{input}`). Example: `{"audiosense":"not_sensing","hdaid":"2","inputport":"1"}`. It is published for every input on a full amplifier status refresh and for a single input when that input's status changes; never on zone changes `[STATIC]`. The richer preamplifier/microphone body listed here in earlier versions (`level`, `phantom`, `threshold`, and others) belongs to the separate topic `tcsystem/global/hda/mic/{hda}/{mic}/`, not to `hda/input` `[STATIC]`.
+- **Amplifier:** `tcsystem/global/hda/ampstatus/{hda}/{k}/`, retain `1`, QoS 0 `[CONFIRMED]`. `{hda}` is the amplifier's connected-device ID; `{k}` is 1-based, `k = slot + 1`, so `ampstatus/{hda}/{k}/` is exactly the same amplifier slot as `hda/zone/{hda}/{k-1}/` `[STATIC]`. For stereo zone *n*, `k = 2n-1` is the left (or stereo pair) channel and `k = 2n` the right channel. Body: `hdaid` (= `{hda}`), `zoneid` (= `"{k}"`), `leftthermal`/`rightthermal` (`"normal"` or `"thermal overload"`), `leftpeak`/`rightpeak` (`"normal"` or `"peaking"`). The left and right members of one message always carry the same value, because both are rendered from the same per-slot flag `[STATIC]`. Example: `{"hdaid":"2","zoneid":"1","leftpeak":"normal","leftthermal":"normal","rightpeak":"normal","rightthermal":"normal"}`.
+  - Publication: only on a full amplifier status refresh (registration or reconnect), for every slot regardless of room binding; never on incremental changes `[STATIC]` (16 retained channels observed, none re-published during live zone changes `[CONFIRMED]`). It can therefore be stale.
+  - Authority: for a room-bound slot, `hda/zone` `amp.thermal`/`amp.peak` carry the same state, are updated on every change, and SHOULD be preferred. `hda/ampstatus` is the only source for unbound slots, including the right half of an unsplit stereo zone, as of the last full refresh. Clients MAY consume this topic but MUST NOT require it.
 - Both use the standard envelope. Do not infer that all HDA models, firmware versions, or input types have identical fields or retention behavior.
 
 ##### 6. Intercom & Door Station Events

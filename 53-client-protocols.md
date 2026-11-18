@@ -1,7 +1,7 @@
 ---
 title: "Mobile and Remote Client Protocols"
 section: "53-client-protocols"
-version: "0.4.0"
+version: "0.5.1"
 status: review
 ---
 
@@ -141,7 +141,7 @@ data
 └── rooms:  [ RoomEntry, ... ]
 ```
 
-**`vars`.** In every observed project, `vars.obj.items` is an empty array `[CONFIRMED]`. The schema of a non-empty entry is **unresolved**. Clients MUST accept an empty list and MUST NOT depend on this list for variable names or values. Runtime variable values are read with `VARIABLE_TABLE_QUERY` (`52-control-protocol` §3.6). Controller daemons do not parse `core_model.json`; only clients read it `[STATIC]`.
+**`vars`.** `vars.obj.items` is an array of bare JSON integers, not objects. An item carries no name, type, or value. In every observed project the array is empty `[CONFIRMED]`, and no observed client reads its contents `[STATIC]`. Whether a non-empty array lists project variable IDs is not established `[INFERRED]`. Clients MUST accept any array of integers, including a non-empty one, and SHOULD NOT depend on its contents. Generators SHOULD emit an empty array and MUST NOT emit objects; a reference client rejects the whole model if an item is not a number `[STATIC]`. Variable display data is bound through room scene entries (`rooms[].scenes.obj[]`), not through `vars`: `var_id` is the controller variable ID (the same `n` as MQTT `variable_id_{n}`), and `states[]` holds per-value display entries `{name, image_name, val}` `[STATIC]`. Older projects use a `type: 2` scene entry with `scene_n` / `scene_p` fields `[STATIC]`. Runtime variable values are read with `VARIABLE_TABLE_QUERY` (`52-control-protocol` §3.6). Controller daemons do not parse `core_model.json`; only clients read it `[STATIC]`.
 
 **`con_devs[]` and the `"type "` key.** The key really is spelled `"type "`, with one trailing space (`0x74 0x79 0x70 0x65 0x20`). All observed entries use this spelling `[CONFIRMED]`. Generators MUST emit `"type "`. Readers MUST look up `"type "` and SHOULD also accept `"type"`. Every observed value is `0`, and the meaning of the value is **unresolved**. In observed projects, `con_devs[].id` values are connected-device ids, the same ids as `mcs.dat` `con_devs[].id`. The list covers only the devices that have UI pages: a multi-zone amplifier device is typically absent `[CONFIRMED]`.
 
@@ -151,7 +151,7 @@ Each element in `data.rooms[]` defines a physical room entity:
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | Integer | Physical room identifier (0..65535). Used directly as `room_id` in TCP 51510 room-power commands (`0x000D`, `0x0012`) and in `DnData.dn` Table 10 `[CONFIRMED]`. `0x07DA` instead carries a project trigger code; see [§3.1 of the control protocol](52-control-protocol.md). |
+| `id` | Integer | Physical room identifier (0..65535). Used directly as `room_id` in TCP 51510 room commands (`0x000D` room power off, `0x0012` power-menu query) and in `DnData.dn` Table 10 `[CONFIRMED]`. `0x07DA` instead carries a project trigger code; see [§3.1 of the control protocol](52-control-protocol.md). |
 | `info` | Object | Envelope containing room presentation metadata `[CONFIRMED]`. |
 | `info.obj.name` | String | User-visible room display name (e.g. `"Living Room"`) `[CONFIRMED]`. |
 | `info.obj.room_image` | String | Path or identifier for room background photo (e.g. `"R:1.JPG"`) `[CONFIRMED]`. |
@@ -207,7 +207,13 @@ $$\text{code} = (\text{object\_id} \ll 16) \mid \text{button\_id}$$
 
 *Example:* `code = 131347` (`0x00020113`) is object `2`, button `275` (`Vol+`).
 
-**Type 4 jump.** `j_type` selects the jump kind and `target` selects the destination. Jump kinds are numbered: `0` = default navigation, `1` = page, `2` = device, `3` = sub-menu, `4` = special screen `[STATIC]`. For `j_type = 0`, `target` selects a built-in destination: `0` = last device, `1`/`2` = previous/next page, `3`/`4` = previous/next navigation page, `5`/`6` = previous/next device, `7` = room main menu, `8` = room list `[STATIC]`. `target = 9` appears in the reference (hard button `4640`), but its meaning is **unresolved**. Clients MUST ignore unknown `target` values. Only `j_type = 0` is observed in `core_model.json` `[CONFIRMED]`. A menu-tile jump to a device is not a client step: it lives in the controller-side action list of the tile's type-33 button. After the client triggers the tile, the controller sends the jump to the client `[STATIC]`. That push channel and its payload are **unresolved** in this specification.
+**Type 4 jump.** A jump is client-local navigation; it is never sent to the controller as a command. `j_type` selects the jump kind and `target` selects the destination. Jump kinds are numbered: `0` = default navigation, `1` = page, `2` = device, `3` = sub-menu, `4` = special screen `[STATIC]`. Transition styles are numbered `0` = replace, `1` = fly from right, `2` = from left, `3` = from top, `4` = from bottom `[STATIC]`.
+
+For `j_type = 0`, `target` selects a built-in destination: `0` = return to the current/last device, `1`/`2` = previous/next page, `3`/`4` = previous/next navigation page, `5`/`6` = previous/next device, `7` = room main menu, `8` = room list `[STATIC]`. Values above `8` are undefined: reference clients take no action for them and the controller does not interpret them `[STATIC]`. A client MUST treat an undefined `target` as a no-op and continue with the next step. Hard button `4640` is bound in the reference project to `j_type = 0`, `target = 9` `[CONFIRMED]`; that binding has no defined effect, and a client MAY omit the button. Only `j_type = 0` is observed in `core_model.json` `[CONFIRMED]`.
+
+For `j_type = 4`, the destination is a special-screen code, a separate value space from the default-jump targets (code `9` here means navigation page, unrelated to default target `9`) `[STATIC]`: `0` now playing, `1` wait, `2` sensor, `3` 12 V, `4` info, `5` bass/treble, `6` lighting, `7` camera, `8` number pad page, `9` navigation page, `10` transport page, `11` off-site, `12` two-way lighting, `13` other page, `16` event, `17` alarm, `18` sleep timer, `19` vacation, `21` power, `48` TSP-2000, `49` photo viewer, `64` TRF Z-Wave, `65`/`66` LG lighting/scenes, `67` room scenes, `68` unified module, `69` intercom, `70` ring module, `72` rooms menu, `80` favorite, `81` keyboard, `96` HDA EQ, `97` HDA volume, `98` HDA volume mixer, `99` HDA announcement, `100` HDA input status, `101` HDA amp status, `102` HDA zone status, `103` HDA zone EQ. A client MUST treat a special-screen code it does not implement as a no-op.
+
+A menu-tile jump to a device is not a client step: it lives in the controller-side action list of the tile's type-33 button. After the client triggers the tile, the controller sends the jump to the client `[STATIC]`. That push channel and its payload are **unresolved** in this specification.
 
 #### 3.4.5 Standard Page Template Categories
 
@@ -228,11 +234,11 @@ Observed projects bind hard buttons identically on every room menu and every roo
 |---|---|---|
 | `4625` | `[{"type": 4, "j_type": 0, "target": 7}]` | Jump to the room main menu `[CONFIRMED]` (binding) / `[STATIC]` (meaning) |
 | `2304` | `[{"type": 4, "j_type": 0, "target": 8}]` | Jump to the room list `[CONFIRMED]` (binding) / `[STATIC]` (meaning) |
-| `4640` | `[{"type": 4, "j_type": 0, "target": 9}]` | **Unresolved** jump destination |
+| `4640` | `[{"type": 4, "j_type": 0, "target": 9}]` | Undefined target: no defined effect; clients treat it as a no-op `[CONFIRMED]` (binding) / `[STATIC]` (no-op) |
 | `4624` | `[{"type": 54, "room": <this room's id>}]` | Turn this room off: `0x000D` with that room id `[CONFIRMED]` (binding) / `[STATIC]` (wire effect) |
 | `275` / `276` / `277` | type 33 | Volume up, volume down, and mute for the object's audio (§3.4.3) `[CONFIRMED]` |
 
-In the vendor's iPhone app, `4625` is presented as the main-menu button and `4624` as the room-power button `[CONFIRMED]` (live test). A client that needs Room Power On uses `ROOM_POWER_ON` (`0x0012`). No hard button in the reference binds it.
+In the vendor's iPhone app, `4625` is presented as the main-menu button and `4624` as the room-power button `[CONFIRMED]` (live test). The control protocol has no room power-on opcode; `0x0012` is a read-only power-menu query ([§3.5 of the control protocol](52-control-protocol.md)). A client that needs to switch a room on triggers one of the room's activity buttons with `MACRO_TRIGGER` (`0x07DA`) ([§3.1](52-control-protocol.md)). No hard button in the reference binds room power-on.
 
 #### 3.4.7 Minimal Room & Device Test Vector (`core_model.json`)
 

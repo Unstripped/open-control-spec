@@ -1,7 +1,7 @@
 ---
 title: Project Model Topology & Device Catalog Formats
 section: 30-project-model
-version: 0.5.0
+version: 0.5.1
 status: draft
 ---
 
@@ -37,7 +37,7 @@ A critical architectural distinction exists between internal controller database
      `object_id` is the room device object (or the room's menu object for `menu_devs` buttons), never a connected-device id. On device pages, the vendor programmer sets `button_id` to the controlled device's function id (`funcs[].id`). Example: `459029 = (7 << 16) | 277` is Mute on reference object `7`, which controls connected device `3` `[CONFIRMED]`. The full macro step catalog is in `53-client-protocols` §3.4.4.
 
 3. **Room-Level Commands:**
-   `ROOM_POWER_OFF` (`0x000D`) and `ROOM_POWER_ON` (`0x0012`) take the room identifier defined in `data.rooms[].id` `[CONFIRMED]`. A `core_model.json` macro step of type `54` (`{"type": 54, "room": <id>}`) means Room Power Off for that room (`53-client-protocols` §3.4.4). `MACRO_TRIGGER` (`0x07DA`) carries a button `code` and no separate room or device field; see `52-control-protocol` §3.1.
+   `ROOM_POWER_OFF` (`0x000D`) and `POWER_MENU_QUERY` (`0x0012`) take the room identifier defined in `data.rooms[].id` `[CONFIRMED]`. `0x0012` is a read-only query and switches nothing on; no opcode powers a room on (`52-control-protocol` §3.5). A `core_model.json` macro step of type `54` (`{"type": 54, "room": <id>}`) means Room Power Off for that room (`53-client-protocols` §3.4.4). `MACRO_TRIGGER` (`0x07DA`) carries a button `code` and no separate room or device field; see `52-control-protocol` §3.1.
 ---
 
 ## 2. Formatting & Serialization Constraints

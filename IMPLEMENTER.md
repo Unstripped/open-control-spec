@@ -1,7 +1,7 @@
 ---
 title: "Clean-Room Implementer Brief & Architecture Guide"
 section: "IMPLEMENTER"
-version: "0.5.0"
+version: "0.5.1"
 status: review
 ---
 
@@ -266,7 +266,7 @@ When compiling these files, the compiler MUST enforce strict relational integrit
 1. **Object ID (`obj_id`) Consistency:** Every `obj_id` assigned to a Base Station, Client, Device, Room, or Variable MUST match identically across `mcs_info.dat`, `mcs.dat`, and `DnData.dn`.
 2. **Table 4 Client Records:** Each mobile client seat in `mcs_info.dat` (`clients` array) corresponds to a client-table record in Table 4 of `DnData.dn` (`spec/32-download-database.md` §5.2). Client records carry an activation descriptor that this specification does not describe how to create; a programmer MUST NOT fabricate activation descriptors. The Minimal Program (`spec/90-examples/minimal-program.md`) uses an empty Table 4.
 3. **Table 5 Subdevice Routing:** Connected devices in Table 5 of `DnData.dn` MUST match the transport definition (`target_type == 1` for IR/Serial, `target_type == 3` for IP).
-4. **Room Power Macros:** In Table 10 of `DnData.dn` (room table), each room entry MUST contain two sequential parameterless button records representing Room Power On and Room Power Off macro sequences.
+4. **Room Power Macros:** In Table 10 of `DnData.dn` (room table), each room entry MUST contain two sequential parameterless button records representing the room's power-on and power-off macro sequences. The power-on record is a database macro, not a control-protocol opcode (`spec/52-control-protocol.md` §3.5).
 
 ### 4.3 Staging Manifests, Checksums & Delivery Paths
 After generating the runtime files, the programmer prepares them for controller deployment following the rules in `spec/20-upload-manifest.md` and `spec/51-upload-protocol.md`:
