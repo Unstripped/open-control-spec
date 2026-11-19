@@ -1,7 +1,7 @@
 ---
 title: "Runtime Control Protocol"
 section: "52-control-protocol"
-version: "0.11.0"
+version: "0.12.0"
 status: review
 ---
 
@@ -431,11 +431,11 @@ The commands name an amplifier zone in one of four ways:
 |---|---|---|---|
 | Room | Room ID (the value used by `0x000D`, §3.3) | `0x00A2`, `0x0006`, `0x007E` | The room's audio routing descriptor (`32-download-database` §5.3, Table 10) names a connected device and a zone-output index `[STATIC]`. Only a room whose descriptor links an amplifier zone reaches one |
 | Trigger code | `(object_id << 16) \| button_id` | `0x001B` | Resolved to a binding as for `0x07ED` (§3.2 step 1) `[CONFIRMED]` |
-| Zone-output index `zone_index` | `0`–`23` | `0x0098` | 0-based position in the amplifier's zone-output list: the index used by Table 5 zone-output lists, room routing descriptors, and device-command macro steps (`32-download-database` §5.2.1, §5.3). In the reference the list is ordered `z1lr`…`z8lr`, `z1l`…`z8l`, `z1r`…`z8r` `[STATIC]`; index `1` addressed `z2lr` `[CONFIRMED]` |
-| Controller slot `slot` | `0`–`15` | `0x0142`, `0x014A` | The slot used by MQTT topic `hda/zone/{hda}/{zone}/` (`00-system-overview` §5.2.2): `2(n−1)` for stereo zone *n* unsplit (`z<n>lr`) or its left half (`z<n>l`), `2(n−1)+1` for its right half (`z<n>r`). Slot `2` addressed `z2lr` `[CONFIRMED]` |
+| Zone-output index `zone_index` | `0`–`23` | `0x0098` | 0-based position in the amplifier's zone-output list: the index used by Table 5 zone-output lists, room routing descriptors, and device-command macro steps (`32-download-database` §5.2.1, §5.3). For an amplifier with *S* stereo zones the list is ordered `z1lr`…`z<S>lr`, `z1l`…`z<S>l`, `z1r`…`z<S>r` `[STATIC]`; index `1` addressed `z2lr` `[CONFIRMED]`. The controller converts the index to a controller slot from the entry's zone-ID (`z<n>…` → 2(*n*−1), plus 1 for a `r` suffix) and addresses the zone-ID currently held by that slot `[STATIC]` |
+| Controller slot `slot` | `0`–`15` | `0x0142`, `0x014A` | The slot used by MQTT topic `hda/zone/{hda}/{zone}/` (`00-system-overview` §5.2.2): slot 2(*n*−1) holds `z<n>lr` when stereo zone *n* is unsplit and `z<n>l` when it is split. Slot 2(*n*−1)+1 holds `z<n>r` when split and is an unbound placeholder otherwise. Slot `2` addressed `z2lr` `[CONFIRMED]` |
 | Zone-ID string | `z<n>lr`, `z<n>l`, `z<n>r` | `0x0132`, `0x012E` | The amplifier's own zone name, carried in its JSON command `[CONFIRMED]` |
 
-The amplifier is named by `hda_id`, its connected-device ID (`mcs.dat` `con_devs[].id`, equal to the Table 5 device ID) `[CONFIRMED]`. That `mcs.dat` `zones[].idx` equals the zone-output index is `[INFERRED]`: both are 0-based lists with one entry per zone output. Where a command accepts it, clients SHOULD name a zone by slot or zone-ID string.
+The amplifier is named by `hda_id`, its connected-device ID (`mcs.dat` `con_devs[].id`, equal to the Table 5 device ID) `[CONFIRMED]`. The controller does not interpret `mcs.dat` `zones[].idx`. That it equals the zone-output index is `[INFERRED]`: in the reference project both are 0-based lists with one entry per zone output and identical command lists per index. Because a zone-output index resolves through the project's split configuration, an index naming `z<n>lr` reaches only `z<n>l` while zone *n* is split. An index naming `z<n>r` reaches the whole `z<n>lr` pair while zone *n* is unsplit `[STATIC]`. Where a command accepts it, clients SHOULD name a zone by slot or zone-ID string, and SHOULD use zone-output indices only for zone-output entries that the current split configuration selects.
 
 #### 3.11.3 Room Audio (`0x00A2`)
 
@@ -907,7 +907,7 @@ controller -> client: 01 4C 00 31 01 01
 3. **Amplifier-Zone Reply Bodies:** The content of a non-empty `0x012C` body after `0x012E`; whether `0x012D` is ever sent; and the bodies of the `0x0003` replies to the room audio state queries `0x00A1` and `0x00A7`, which this specification does not yet define (§3.11).
 4. **Power Menu Entries:** The entry layout of the `0x0012` global and room power-menu lists beyond the two counts, the offset from which `room_id` is read, and whether an unknown room shortens the reply (§3.5).
 5. **Address Registration:** Rule 10 of §4 has not been tested with a second client host. The release point for `0x0012`, `0x0FE5`, `0x1389`, and the §3.11 commands is not established.
-6. **Room Audio Forms:** The get, balance, treble, and bass forms and `0x0011` in §3.11.10; `0x0144` live behaviour; whether `mcs.dat` `zones[].idx` equals the zone-output index (§3.11.2).
+6. **Room Audio Forms:** The get, balance, treble, and bass forms and `0x0011` in §3.11.10; `0x0144` live behaviour; `mcs.dat` `zones[].idx` is not interpreted by the controller, and its equality with the zone-output index is inferred, not confirmed (§3.11.2).
 7. **`0x07ED` Acceptance:** No device has been observed to accept `0x07ED`; both device paths in §3.2 step 2 are `[STATIC]`.
 8. **Controller-to-Client Jump:** When a controller-side macro contains a page jump, the controller pushes `0x07DF` to the client. Its payload layout and delivery path are not established.
 9. **Prefix Byte Scope:** Whether opcodes other than `0x07DA`, `0x07ED`, `0x089B`, and §3.11.3–§3.11.9 carry the §2.1.1 prefix. `0x089A`, `0x0130`, and `0x013B` ignore payload bytes.

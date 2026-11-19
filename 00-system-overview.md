@@ -1,7 +1,7 @@
 ---
 title: "System Overview & Process Architecture"
 section: "00-system-overview"
-version: "0.8.0"
+version: "0.9.0"
 status: review
 type: Architecture
 confidence: confirmed
@@ -9,7 +9,7 @@ open_items:
   - "Empirically decode the binary serialization structure of /tmp/dobj_*.cmd dynamic UI command files."
   - "Map full JSON request/response schema for DeviceGuard REST endpoints on 127.0.0.1:54211."
   - "Verify trigger packet layout for on-demand socket activation daemon svc_exam on TCP port 22222."
-  - "Establish the general mapping from mcs.dat zones[].idx to the hda/zone topic slot beyond slot 0."
+  - "Confirm mcs.dat zones[].idx equals the zone-output index with a project whose amplifier zones have different command sets."
   - "Identify a state-query path for rooms and HDA zones unchanged since boot; MQTT retains only values published since broker start."
   - "Observe hda/zone bodies for split (mono) zones and active ducking, and non-normal hda/ampstatus values, on live hardware."
   - "Capture variable_status bodies for Integer and String variables at controller start, and confirm that no message follows their runtime changes."
@@ -369,9 +369,12 @@ Clients MUST NOT expect an array or a `room_id` field on this topic. When more t
 | `fixed` | Integer | `0` observed | Raw amplifier output-type value: `0` = Variable volume, non-zero = fixed output. Only `0` has been observed; values greater than `1` are not excluded `[STATIC]`. |
 
 ##### 2. HDA Matrix Zone Telemetry (`tcsystem/global/hda/zone/{hda}/{zone}/`)
-- **Topic Grammar:** `tcsystem/global/hda/zone/{hda}/{zone}/` (trailing slash present) `[CONFIRMED]`. `{hda}` is the amplifier's connected-device ID (`con_devs[].id` in `mcs.dat`) `[STATIC]`. `{zone}` is a 0-based controller slot: for stereo zone *n* (1-based) of the amplifier, slot `2(n-1)` carries `z<n>lr` (unsplit) or `z<n>l` (split left half), and slot `2(n-1)+1` carries `z<n>r` (split right half only) `[STATIC]`. An HDA-8100 therefore has 16 slots.
-- **Topic slot vs `zones[].idx`:** The topic slot is a controller slot, not `mcs.dat` `zones[].idx` by definition. In the one observation, slot `0` / `z1lr` coincided with `zones[].idx` `0`; the mapping from `zones[].idx` to slot beyond that case is not established, and clients MUST NOT derive one. Clients MUST identify the amplifier channel by body `zoneid`, not by `{zone}` or `zones[].idx`.
-- **Publication:** Retain `1`, QoS 0 `[CONFIRMED]`. A slot is published only while it is bound to a room and the amplifier is online; the right slot of an unsplit stereo zone is an unbound placeholder and is never published `[STATIC]`.
+- **Topic Grammar:** `tcsystem/global/hda/zone/{hda}/{zone}/` (trailing slash present) `[CONFIRMED]`. `{hda}` is the amplifier's connected-device ID `[STATIC]`. `{zone}` is a 0-based controller slot. For an amplifier with *S* stereo zones (the split-option count of its project zone configuration, `32-download-database` §5.3), the controller allocates 2*S* slots, two per stereo zone *n* (1-based), as follows `[STATIC]`:
+  - zone *n* unsplit: slot 2(*n*−1) carries `z<n>lr`, bound to the room of zone-output index *n*−1. Slot 2(*n*−1)+1 is an unbound placeholder.
+  - zone *n* split: slot 2(*n*−1) carries `z<n>l`, bound to the room of zone-output index *S*+*n*−1. Slot 2(*n*−1)+1 carries `z<n>r`, bound to the room of zone-output index 2*S*+*n*−1.
+  - Room bindings of zone-output entries not selected by the split configuration MUST be ignored. An HDA-8100 (*S* = 8) has 16 slots.
+- **Relation to other zone numbers:** with the zone-output list ordered `z1lr`…`z<S>lr`, `z1l`…`z<S>l`, `z1r`…`z<S>r`, zone-output index *k* maps to the slot computed from entry *k*'s zone-ID `z<n><suffix>` as 2(*n*−1), plus 1 when the suffix is `r` `[STATIC]`. `mcs.dat` `zones[].idx` is not interpreted by the controller. In the reference project it lists one entry per zone output, in zone-output order `[INFERRED]`. Clients MUST identify the amplifier channel by body `zoneid` and MUST NOT treat `{zone}` as a zone-output index or as `zones[].idx`.
+- **Publication:** Retain `1`, QoS 0 `[CONFIRMED]`. A slot is published only while it is bound to a room and the amplifier is online. The placeholder slot of an unsplit stereo zone is never published `[STATIC]`.
 - **Body Schema:** One object; every scalar is a JSON string, including identifiers and numbers `[CONFIRMED]`. Example with synthetic labels:
 
 ```json
@@ -417,7 +420,12 @@ Source fields depend on the zone's source type `[STATIC]`:
 - **Chime *n*:** `inputhdaid` (this amplifier) and `inputhdaport` (*n*) are always present; `inputdevname` is the sound name, present only if found.
 - **None or unrecognised:** none of the three fields.
 
-Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1"` `[CONFIRMED]`. Split (`"mono"`) and ducking-active bodies have not been observed live. Clients SHOULD tolerate additional fields.
+Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1"` `[CONFIRMED]`. For a split half, the body has the same members as for an unsplit zone, with these values `[STATIC]`:
+- `stereo` is `"mono"` and `zoneid` is `z<n>l` or `z<n>r`;
+- the room members describe the room bound to that half;
+- all state members reflect that half of the amplifier.
+
+For an unsplit zone, the state members reflect the amplifier's left half of that zone. While a ducking event is active, `ducking` contains `status` `"on"`, `mute`, `eventid` (the event number reported by the amplifier) and, when the project defines a ducking event with that number, `inputname`. No other member changes `[STATIC]`. Neither split nor ducking-active bodies have been observed live. Clients SHOULD tolerate additional fields.
 
 **`zone_status` vs `hda/zone`.** For a room whose audio is an HDA zone, both topics are rendered from the same amplifier-zone record; neither is a separate data source `[STATIC]`. On an incremental zone change the controller publishes `hda/zone` first and then `zone_status`, normally with the same `header.time_stamp` `[CONFIRMED]`; `zone_status` is re-published on any zone change, including tone-only changes, even when its own fields are unchanged `[CONFIRMED]`. They are not always co-published: on a full amplifier status refresh (amplifier registration or reconnect) the controller publishes `hda/zone` for every room-bound slot and does not publish `zone_status`; conversely `zone_status` is also published for rooms whose audio is not an HDA zone, where no `hda/zone` exists `[STATIC]`. Clients SHOULD treat `hda/zone` as authoritative for an HDA-backed room and use `zone_status` for rooms without an HDA zone. `zone_status.max_vol` reflects the amplifier's configured maximum, whereas `hda/zone` `volume.max` is always `"100"` and `volume.min` always `"0"`. Treat each as a potentially stale observation.
 
