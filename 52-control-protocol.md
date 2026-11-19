@@ -1,7 +1,7 @@
 ---
 title: "Runtime Control Protocol"
 section: "52-control-protocol"
-version: "0.12.0"
+version: "0.13.0"
 status: review
 ---
 
@@ -276,9 +276,9 @@ Each 5-byte variable status entry consists of:
 | `+0x04` | 1 | `value` | uint8 | Boolean state `[CONFIRMED]` |
 
 - **Boolean variables only:** the reply lists the project's Boolean (type `0`, `32-download-database` §5.0.2) variables, in the project's variable-table order. Integer and String variables never appear `[STATIC]`. A `var_id` listed here is therefore Boolean; the reply carries no type field.
-- **Count:** `count` is taken from the project's Boolean-variable list (`32-download-database` §5.0.3), and the controller stops after `count` records or at the end of its Boolean variables, whichever comes first, so $k \le$ `count` `[STATIC]`. In a correctly generated project the two agree. Clients MUST bound parsing by the frame length, not by `count` alone.
+- **Count:** `count` is taken from the project's Boolean-variable list (`32-download-database` §5.0.3), and the controller stops after `count` records or at the end of its Boolean variables, whichever comes first, so $k \le$ `count` `[STATIC]`. In a correctly generated project the two agree, and `count` then equals the number of Boolean variables `[CONFIRMED]`. Clients MUST bound parsing by the frame length, not by `count` alone.
 - **Value:** `0` or `1` once the variable has been set at runtime `[CONFIRMED]`. Before the first runtime set it is the first byte of the variable's initial value as stored in the project, which the controller does not range-check `[STATIC]`. Clients SHOULD treat any non-zero value as true.
-- **Example (no Boolean variables):** `02 02 00 9A 08` → `00 07 00 98 08 01 00 00 00 00` `[CONFIRMED]`.
+- **Examples:** no Boolean variables: `02 02 00 9A 08` → `00 07 00 98 08 01 00 00 00 00` `[CONFIRMED]`. One Boolean variable, ID 21, false: `02 03 00 9A 08 00` → `00 0C 00 98 08 01 01 00 00 00 15 00 00 00 00` `[CONFIRMED]`.
 
 #### 3.6.1 Variable Values Query (`0x089B`)
 
@@ -293,7 +293,7 @@ Each 5-byte variable status entry consists of:
 
   The controller does not check `count` against the frame length; clients MUST send exactly `count` IDs `[STATIC]`.
 - **Response:** `status = 0x01`. Body: `count` echoed (uint32 LE), then one 5-byte record (`var_id` uint32 LE, `value` uint8, as in §3.6) per requested ID, in request order `[STATIC]`.
-- **Response opcode:** `0x0898` when every requested ID names a Boolean variable `[STATIC]`. Otherwise `0x0899`: the controller stops at the first ID that is unknown **or not Boolean**, and the body holds only the records for the IDs before it `[CONFIRMED]` (unknown ID) / `[STATIC]` (not Boolean). Clients MUST NOT read `0x0899` as "unknown ID" alone.
+- **Response opcode:** `0x0898` when every requested ID names a Boolean variable `[CONFIRMED]`. Otherwise `0x0899`: the controller stops at the first ID that is unknown or not Boolean, and the body holds only the records for the IDs before it `[CONFIRMED]`. Integer, String, and unknown IDs produce identical replies; clients MUST NOT use `0x0899` to tell them apart.
 - **Connection Effect:** Terminal (§4 rule 3) `[CONFIRMED]`.
 - **Examples:**
 
@@ -302,10 +302,12 @@ Each 5-byte variable status entry consists of:
 | `02 07 00 9B 08 00 00 00 00 00` | `00 07 00 98 08 01 00 00 00 00` | `count = 0` `[CONFIRMED]` |
 | `02 0B 00 9B 08 00 01 00 00 00 01 00 00 00` | `00 07 00 99 08 01 01 00 00 00` | ID `1` unknown or not Boolean; no records `[CONFIRMED]` |
 | `02 0F 00 9B 08 00 02 00 00 00 01 00 00 00 02 00 00 00` | `00 07 00 99 08 01 02 00 00 00` | Stops at the first ID; no records `[CONFIRMED]` |
+| `02 0B 00 9B 08 00 01 00 00 00 15 00 00 00` | `00 0C 00 98 08 01 01 00 00 00 15 00 00 00 00` | ID 21 is Boolean, value 0 `[CONFIRMED]` |
+| `02 0F 00 9B 08 00 02 00 00 00 15 00 00 00 16 00 00 00` | `00 0C 00 99 08 01 02 00 00 00 15 00 00 00 00` | ID 22 is not Boolean; the record for ID 21 is kept `[CONFIRMED]` |
 
 #### 3.6.2 Boolean Variable Change Notification (UDP `0x089D`)
 
-When a Boolean variable's state changes at runtime, the controller sends an 11-byte UDP datagram to multicast group `239.255.95.91`, port `49950` `[STATIC]`:
+When a Boolean variable's state changes at runtime, the controller sends an 11-byte UDP datagram to multicast group `239.255.95.91`, port `49950` `[CONFIRMED]`:
 
 | Offset | Size | Field | Value |
 |---|---|---|---|
@@ -315,15 +317,15 @@ When a Boolean variable's state changes at runtime, the controller sends an 11-b
 | 0x06 | 4 | `var_id` | uint32 LE |
 | 0x0A | 1 | `value` | `0` or `1` |
 
-Each change is sent twice, about 10 ms apart. Nothing is sent at startup, when a set leaves the state unchanged, or for Integer and String variables `[STATIC]`. Opcode `0x089C` is never sent `[STATIC]`. Clients MAY join the group and MUST tolerate duplicates. No datagram has been captured live.
+Each change is sent twice, about 10 ms apart, from the same ephemeral source port, with IP TTL 64 `[CONFIRMED]`. Example (variable 21 became true): `00 08 00 9D 08 01 15 00 00 00 01` `[CONFIRMED]`. Nothing is sent at startup, when a set leaves the state unchanged, or for Integer and String variables `[CONFIRMED]`. A set whose value byte is neither `0` nor `1` toggles the state `[CONFIRMED]`. Opcode `0x089C` is never sent `[STATIC]`. Clients MAY join the group and MUST tolerate duplicates.
 
 #### 3.6.3 Reading Variables: Summary
 
 | Variable type | Type known from | Current value readable from |
 |---|---|---|
 | Boolean (`0`) | Listed by `0x089A`; `0x0898` reply to `0x089B`; MQTT `variable_type` | `0x089A`, `0x089B`, `0x089D`, MQTT `variable_status` (`00-system-overview` §5.2.2 item 3) |
-| Integer (`1`) | MQTT `variable_type` only | Not readable. MQTT carries only the low byte of the initial value, published at controller start; runtime changes are reported on no channel `[STATIC]` |
-| String (`2`) | MQTT `variable_type` only | Initial value only, from MQTT at controller start; runtime changes are reported on no channel `[STATIC]` |
+| Integer (`1`) | MQTT `variable_type` only | Not readable. MQTT carries only the low byte of the initial value, published at controller start. Runtime changes are reported on no channel, and the retained MQTT value stays the start-up value `[CONFIRMED]` |
+| String (`2`) | MQTT `variable_type` only | Initial value only, from MQTT at controller start. Runtime changes are reported on no channel, and the retained MQTT value stays the start-up value `[CONFIRMED]` |
 
 No TCP 51510 request and no staged client file distinguishes an Integer from a String variable `[STATIC]`. When the retained MQTT message is missing (`00-system-overview` §5.2.2 item 3), a client can only tell Boolean (listed by `0x089A`) from not Boolean or unknown.
 
@@ -431,11 +433,11 @@ The commands name an amplifier zone in one of four ways:
 |---|---|---|---|
 | Room | Room ID (the value used by `0x000D`, §3.3) | `0x00A2`, `0x0006`, `0x007E` | The room's audio routing descriptor (`32-download-database` §5.3, Table 10) names a connected device and a zone-output index `[STATIC]`. Only a room whose descriptor links an amplifier zone reaches one |
 | Trigger code | `(object_id << 16) \| button_id` | `0x001B` | Resolved to a binding as for `0x07ED` (§3.2 step 1) `[CONFIRMED]` |
-| Zone-output index `zone_index` | `0`–`23` | `0x0098` | 0-based position in the amplifier's zone-output list: the index used by Table 5 zone-output lists, room routing descriptors, and device-command macro steps (`32-download-database` §5.2.1, §5.3). For an amplifier with *S* stereo zones the list is ordered `z1lr`…`z<S>lr`, `z1l`…`z<S>l`, `z1r`…`z<S>r` `[STATIC]`; index `1` addressed `z2lr` `[CONFIRMED]`. The controller converts the index to a controller slot from the entry's zone-ID (`z<n>…` → 2(*n*−1), plus 1 for a `r` suffix) and addresses the zone-ID currently held by that slot `[STATIC]` |
-| Controller slot `slot` | `0`–`15` | `0x0142`, `0x014A` | The slot used by MQTT topic `hda/zone/{hda}/{zone}/` (`00-system-overview` §5.2.2): slot 2(*n*−1) holds `z<n>lr` when stereo zone *n* is unsplit and `z<n>l` when it is split. Slot 2(*n*−1)+1 holds `z<n>r` when split and is an unbound placeholder otherwise. Slot `2` addressed `z2lr` `[CONFIRMED]` |
+| Zone-output index `zone_index` | `0`–`23` | `0x0098` | 0-based position in the amplifier's zone-output list: the index used by Table 5 zone-output lists, room routing descriptors, and device-command macro steps (`32-download-database` §5.2.1, §5.3). For an amplifier with *S* stereo zones the list is ordered `z1lr`…`z<S>lr`, `z1l`…`z<S>l`, `z1r`…`z<S>r` `[STATIC]`. Index `1` addressed `z2lr` `[CONFIRMED]`; with zone 2 split, index `9` addressed `z2l` and index `17` addressed `z2r` `[CONFIRMED]`. The controller converts the index to a controller slot from the entry's zone-ID (`z<n>…` → 2(*n*−1), plus 1 for a `r` suffix) and addresses the zone-ID currently held by that slot `[CONFIRMED]` |
+| Controller slot `slot` | `0`–`15` | `0x0142`, `0x014A` | The slot used by MQTT topic `hda/zone/{hda}/{zone}/` (`00-system-overview` §5.2.2): slot 2(*n*−1) holds `z<n>lr` when stereo zone *n* is unsplit and `z<n>l` when it is split. Slot 2(*n*−1)+1 holds `z<n>r` when split and is an unbound placeholder otherwise. Slot `2` addressed `z2lr` `[CONFIRMED]`; with zone 2 split, slots `2` and `3` addressed `z2l` and `z2r` `[CONFIRMED]` |
 | Zone-ID string | `z<n>lr`, `z<n>l`, `z<n>r` | `0x0132`, `0x012E` | The amplifier's own zone name, carried in its JSON command `[CONFIRMED]` |
 
-The amplifier is named by `hda_id`, its connected-device ID (`mcs.dat` `con_devs[].id`, equal to the Table 5 device ID) `[CONFIRMED]`. The controller does not interpret `mcs.dat` `zones[].idx`. That it equals the zone-output index is `[INFERRED]`: in the reference project both are 0-based lists with one entry per zone output and identical command lists per index. Because a zone-output index resolves through the project's split configuration, an index naming `z<n>lr` reaches only `z<n>l` while zone *n* is split. An index naming `z<n>r` reaches the whole `z<n>lr` pair while zone *n* is unsplit `[STATIC]`. Where a command accepts it, clients SHOULD name a zone by slot or zone-ID string, and SHOULD use zone-output indices only for zone-output entries that the current split configuration selects.
+The amplifier is named by `hda_id`, its connected-device ID (`mcs.dat` `con_devs[].id`, equal to the Table 5 device ID) `[CONFIRMED]`. The controller does not interpret `mcs.dat` `zones[].idx`. That it equals the zone-output index is `[INFERRED]`: in the reference project both are 0-based lists with one entry per zone output and identical command lists per index. Because a zone-output index resolves through the project's split configuration, an index naming `z<n>lr` reaches only `z<n>l` while zone *n* is split, and an index naming `z<n>l` or `z<n>r` reaches the whole `z<n>lr` pair while zone *n* is unsplit `[CONFIRMED]`. Where a command accepts it, clients SHOULD name a zone by slot or zone-ID string, and SHOULD use zone-output indices only for zone-output entries that the current split configuration selects.
 
 #### 3.11.3 Room Audio (`0x00A2`)
 
@@ -598,7 +600,8 @@ Clients MUST NOT use these opcodes for amplifier zones.
 | 0x08 + 69i | 1 | `input_port` | uint8 | 1-based input position on that amplifier, in the numbering used by `0x0132` `input_port` | `[CONFIRMED]` (analog) / `[STATIC]` (built-in) |
 | 0x09 + 69i | 64 | `name` | char[64] | Name of the source device bound to the input, NUL-padded. Empty when the name is 64 bytes or longer | `[CONFIRMED]` |
 
-- **Content:** one record for each input, on every amplifier in the project, that has a source device bound in the project; an unbound input has no record `[CONFIRMED]`. Records follow project order: amplifier by amplifier, then input by input `[STATIC]`. A built-in (microphone) input is listed with the microphone's name `[STATIC]`.
+- **Content:** one record for each input, on every amplifier in the project, that has a source device bound in the project; an unbound input has no record `[CONFIRMED]`. Records follow project order: amplifier by amplifier, then input by input `[STATIC]`. A built-in (microphone) input is listed with the microphone's name `[STATIC]`; the reference amplifier has no built-in inputs.
+- **Amplifier status dependency:** the list is built from the amplifier status that the controller holds as well as from the project. When no status is available, the reply is status `0x01` with `count = 0` `[STATIC]`. Clients MUST NOT read an empty list as "no bound inputs" and SHOULD query again after the amplifier is online.
 - **Lifecycle:** as §3.11.1. Clients SHOULD re-read the list after a project change.
 
 #### 3.11.13 Amplifier Input Detail (`0x013B`)
@@ -620,7 +623,7 @@ Clients MUST NOT use these opcodes for amplifier zones.
 | 0x8C | 1 | `stereo` | uint8 | Stereo mode; `1` observed, other values not established | `[CONFIRMED]` (`1`) |
 | 0x8D | 1 | `sensing` | uint8 | Sensing option; `0` observed, other values not established | `[CONFIRMED]` (`0`) |
 
-- **Content:** analog inputs without a bound source are omitted; built-in inputs are always listed `[STATIC]`. String fields are NUL-padded and MAY fill all 32 bytes with no terminator; longer names are truncated `[STATIC]`. Text that the controller learns from the amplifier (such as `input_type`) MAY be empty while the amplifier is offline `[INFERRED]`.
+- **Content:** analog inputs without a bound source are omitted; built-in inputs are always listed `[STATIC]`; the reference amplifier has no built-in inputs. As for `0x0130`, a reply with `count = 0` can mean that no amplifier status is available yet `[STATIC]`. String fields are NUL-padded and MAY fill all 32 bytes with no terminator; longer names are truncated `[STATIC]`. Text that the controller learns from the amplifier (such as `input_type`) MAY be empty while the amplifier is offline `[INFERRED]`.
 - **Port numbering:** `port` counts within its kind, so it is not the `0x0132` `input_port` for a built-in input or for an amplifier that has built-in inputs. Clients MUST take `0x0132` port numbers from `0x0130` `[STATIC]`.
 - **Lifecycle:** as §3.11.1.
 
@@ -907,9 +910,9 @@ controller -> client: 01 4C 00 31 01 01
 3. **Amplifier-Zone Reply Bodies:** The content of a non-empty `0x012C` body after `0x012E`; whether `0x012D` is ever sent; and the bodies of the `0x0003` replies to the room audio state queries `0x00A1` and `0x00A7`, which this specification does not yet define (§3.11).
 4. **Power Menu Entries:** The entry layout of the `0x0012` global and room power-menu lists beyond the two counts, the offset from which `room_id` is read, and whether an unknown room shortens the reply (§3.5).
 5. **Address Registration:** Rule 10 of §4 has not been tested with a second client host. The release point for `0x0012`, `0x0FE5`, `0x1389`, and the §3.11 commands is not established.
-6. **Room Audio Forms:** The get, balance, treble, and bass forms and `0x0011` in §3.11.10; `0x0144` live behaviour; `mcs.dat` `zones[].idx` is not interpreted by the controller, and its equality with the zone-output index is inferred, not confirmed (§3.11.2).
+6. **Room Audio Forms:** The get, balance, treble, and bass forms and `0x0011` in §3.11.10; `0x0144` live behaviour. Split-zone addressing is confirmed (§3.11.2); whether `mcs.dat` `zones[].idx` equals the zone-output index is still inferred.
 7. **`0x07ED` Acceptance:** No device has been observed to accept `0x07ED`; both device paths in §3.2 step 2 are `[STATIC]`.
 8. **Controller-to-Client Jump:** When a controller-side macro contains a page jump, the controller pushes `0x07DF` to the client. Its payload layout and delivery path are not established.
 9. **Prefix Byte Scope:** Whether opcodes other than `0x07DA`, `0x07ED`, `0x089B`, and §3.11.3–§3.11.9 carry the §2.1.1 prefix. `0x089A`, `0x0130`, and `0x013B` ignore payload bytes.
-10. **Amplifier Inputs:** Built-in (microphone) inputs in `0x0130` and `0x013B`, record order across several amplifiers, and the `stereo` and `sensing` values beyond `1` and `0` (§3.11.12, §3.11.13). The reference project has one amplifier and no microphone.
-11. **Variables with Values:** A `0x089B` `0x0898` reply, the `0x089D` datagram, and the `variable_status` bodies for Integer and String variables have not been captured; the reference project declares no variables. Also not established: behaviour when the Boolean-variable list count differs from the number of Boolean variables, variable types above `2`, and the largest accepted `0x089B` `count` (§3.6).
+10. **Amplifier Inputs:** Built-in (microphone) inputs in `0x0130` and `0x013B`, record order across several amplifiers, and the `stereo` and `sensing` values beyond `1` and `0` (§3.11.12, §3.11.13). The reference project has one amplifier and no microphone; built-in inputs need an amplifier that has them.
+11. **Variables:** Behaviour when the Boolean-variable list count differs from the number of Boolean variables, variable types above `2`, and the largest accepted `0x089B` `count` (§3.6).

@@ -1,7 +1,7 @@
 ---
 title: "System Overview & Process Architecture"
 section: "00-system-overview"
-version: "0.9.0"
+version: "0.10.0"
 status: review
 type: Architecture
 confidence: confirmed
@@ -11,8 +11,7 @@ open_items:
   - "Verify trigger packet layout for on-demand socket activation daemon svc_exam on TCP port 22222."
   - "Confirm mcs.dat zones[].idx equals the zone-output index with a project whose amplifier zones have different command sets."
   - "Identify a state-query path for rooms and HDA zones unchanged since boot; MQTT retains only values published since broker start."
-  - "Observe hda/zone bodies for split (mono) zones and active ducking, and non-normal hda/ampstatus values, on live hardware."
-  - "Capture variable_status bodies for Integer and String variables at controller start, and confirm that no message follows their runtime changes."
+  - "Observe hda/zone bodies with active ducking (needs an amplifier zone enrolled in the event) and non-normal hda/ampstatus values on live hardware."
 ---
 
 # System Overview & Process Architecture
@@ -356,7 +355,7 @@ Telemetry topics append explicit hierarchical identifiers to discriminate event 
 {"zone_power": 1, "cur_vol": 45, "min_vol": 0, "max_vol": 100, "mute": 0, "fixed": 0}
 ```
 
-Clients MUST NOT expect an array or a `room_id` field on this topic. When more than one amplifier zone is bound to the same room (for example both halves of a split stereo zone), each zone's change publishes its own single object to the same topic and the most recent publish replaces the retained value (last write wins) `[STATIC]`.
+Clients MUST NOT expect an array or a `room_id` field on this topic. When more than one amplifier zone is bound to the same room (for example a stereo zone and one half of a split zone), each zone's change publishes its own single object to the same topic, and the most recent publish replaces the retained value (last write wins) `[CONFIRMED]`.
 
 | Body Field | Type | Range / Format | Description |
 |---|---|---|---|
@@ -425,7 +424,7 @@ Observed: an analog-input source produced `inputhdaid` `"2"`, `inputhdaport` `"1
 - the room members describe the room bound to that half;
 - all state members reflect that half of the amplifier.
 
-For an unsplit zone, the state members reflect the amplifier's left half of that zone. While a ducking event is active, `ducking` contains `status` `"on"`, `mute`, `eventid` (the event number reported by the amplifier) and, when the project defines a ducking event with that number, `inputname`. No other member changes `[STATIC]`. Neither split nor ducking-active bodies have been observed live. Clients SHOULD tolerate additional fields.
+For an unsplit zone, the state members reflect the amplifier's left half of that zone. Split-half bodies are confirmed: slot 2(*n*−1) carries `z<n>l` and slot 2(*n*−1)+1 carries `z<n>r`, both with `stereo` `"mono"`; no body carries `z<n>lr` while zone *n* is split, even when its zone-output entry is bound to a room; room members come from each half's own binding `[CONFIRMED]`. While a ducking event is active, `ducking` contains `status` `"on"`, `mute`, `eventid` (the event number reported by the amplifier) and, when the project defines a ducking event with that number, `inputname`. No other member changes `[STATIC]`. Ducking-active bodies have not been observed: a controller-initiated ducking start changes a zone only if the amplifier itself enrols that zone in the event, which the controller project cannot configure. Clients SHOULD tolerate additional fields.
 
 **`zone_status` vs `hda/zone`.** For a room whose audio is an HDA zone, both topics are rendered from the same amplifier-zone record; neither is a separate data source `[STATIC]`. On an incremental zone change the controller publishes `hda/zone` first and then `zone_status`, normally with the same `header.time_stamp` `[CONFIRMED]`; `zone_status` is re-published on any zone change, including tone-only changes, even when its own fields are unchanged `[CONFIRMED]`. They are not always co-published: on a full amplifier status refresh (amplifier registration or reconnect) the controller publishes `hda/zone` for every room-bound slot and does not publish `zone_status`; conversely `zone_status` is also published for rooms whose audio is not an HDA zone, where no `hda/zone` exists `[STATIC]`. Clients SHOULD treat `hda/zone` as authoritative for an HDA-backed room and use `zone_status` for rooms without an HDA zone. `zone_status.max_vol` reflects the amplifier's configured maximum, whereas `hda/zone` `volume.max` is always `"100"` and `volume.min` always `"0"`. Treat each as a potentially stale observation.
 
@@ -433,9 +432,9 @@ For an unsplit zone, the state members reflect the amplifier's left half of that
 - **Topic Grammar:** `tcsystem/global/variable_status/variable_id_{variable_id}` where `{variable_id}` is the 32-bit state variable index (`Table 8` in `DnData.dn`) `[CONFIRMED]`.
 - **Retain:** `1` (QoS 0) `[CONFIRMED]`. `header.seq` is always `0` on this topic `[STATIC]`.
 - **Publication:**
-  - At controller application start, one message for every variable in the project, of every type, whether or not its value ever changes `[STATIC]`.
-  - Afterwards, a message only when a **Boolean** variable's state changes `[STATIC]`. Runtime changes to Integer and String variables are not published on this topic or on any other channel (`52-control-protocol` §3.6.3).
-  - The controller does not republish after a broker restart, and the broker keeps no retained messages across its own restart (§5.2) `[STATIC]`. After a broker restart a Boolean variable's topic reappears at its next change, and Integer and String topics only at the next controller application start. A missing topic therefore does not mean that the variable does not exist.
+  - At controller application start, exactly one retained message for every variable in the project, of every type, whether or not its value ever changes `[CONFIRMED]`.
+  - Afterwards, a message only when a **Boolean** variable's state changes `[CONFIRMED]`. Runtime changes to Integer and String variables are not published on this topic or on any other channel, and their retained messages keep the start-up value (`52-control-protocol` §3.6.3) `[CONFIRMED]`.
+  - The controller does not republish after a broker restart, and the broker keeps no retained messages across its own restart (§5.2) `[STATIC]`. After a broker restart together with a controller restart, no variable topic of a previous project remains `[CONFIRMED]`. After a broker-only restart a Boolean variable's topic reappears at its next change, and Integer and String topics only at the next controller application start. A missing topic therefore does not mean that the variable does not exist.
   - In a project without variables no `variable_status` message is retained `[CONFIRMED]`.
 - **Body Schema:**
 
@@ -449,7 +448,7 @@ For an unsplit zone, the state members reflect the amplifier's left half of that
 | Body Field | Type | Range / Format | Description |
 |---|---|---|---|
 | `variable_type` | Integer | `0`, `1`, `2` | Variable datatype: `0` = Boolean, `1` = Integer, `2` = String `[CONFIRMED]`. The only client-readable source that distinguishes Integer from String (`52-control-protocol` §3.6.3) `[STATIC]`. |
-| `value` | String | Decimal text or text | Boolean: `"0"` or `"1"` `[CONFIRMED]`. Integer: unsigned decimal of the **low byte** of the initial value, at start only (for example `1000` → `"232"`, `-1` → `"255"`); clients MUST NOT treat it as the variable's numeric value `[STATIC]`. String: the initial text up to its first NUL, at start only `[STATIC]`. |
+| `value` | String | Decimal text or text | Boolean: `"0"` or `"1"` `[CONFIRMED]`. Integer: unsigned decimal of the **low byte** of the initial value, at start only (for example `1000` → `"232"`, `-1` → `"255"`); clients MUST NOT treat it as the variable's numeric value `[CONFIRMED]`. String: the initial text up to its first NUL, at start only (for example `"abc"`) `[CONFIRMED]`. |
 
 ##### 4. Room Link State (`tcsystem/global/room_event/link_status/link_id_{link_id}`)
 - **Topic Grammar:** `tcsystem/global/room_event/link_status/link_id_{link_id}` where `{link_id}` is the synchronized audio link group ID `[CONFIRMED]`.
@@ -476,7 +475,7 @@ For an unsplit zone, the state members reflect the amplifier's left half of that
 ##### 6. Intercom & Door Station Events
 - **Camera Popup:** `tcsystem/global/camera_popup` (`retain: 0`) with body containing `camera_id`, `client_id`, `popup_status` `[CONFIRMED]`.
 - **Door Station Event:** `tcsystem/enc/global/door_station_event` (`retain: 0`) carrying encrypted or tokenized intercom call events `[CONFIRMED]`.
-- **Paging Announcement:** `tcsystem/global/hda/announce/{announce_id}/` (`retain: 0`) carrying ducking activation and audio chime events `[CONFIRMED]`.
+- **Paging Announcement:** `tcsystem/global/hda/announce/{announce_id}/` (`retain: 1`, QoS 0) carrying ducking and paging event notifications and audio chime events `[CONFIRMED]`. A stopped ducking event published a body with members `actionstatus`, `affectedzone` (array of `hdadevid`, `hdazoneindex` = controller slot, `roomid`, `roomname`, `zonepower`), `announceid`, `duckingid`, `duckingtype`, `duration`, `eventname`, `eventtype`, `input2name`, `inputname`, `mic2hdaid`, `mic2port`, `michdaid`, `micport`, `soundid`, and `volumereduction`, all JSON strings `[CONFIRMED]`.
 ### 5.3 Volatile Staging & Command Descriptors (`/tmp`)
 
 The `/tmp` directory is mounted on a volatile `tmpfs` RAM disk (`/var/volatile/tmp`), ensuring that ephemeral command files do not cause flash write exhaustion on the eMMC:

@@ -1,6 +1,6 @@
 ---
 title: Controller Binary Download Database (DnData.dn)
-version: "0.6.0"
+version: "0.7.0"
 status: draft
 ---
 
@@ -367,11 +367,13 @@ Automation macros and UI button actions are encoded as sequences of variable-len
 |---|---|---|---|
 | `OP_DELAY` | `0x01` | 7 | Delay step: duration in milliseconds (`uint32_le`), flags (`uint16_le`). Examples: `0x00001388` = 5000 ms, `0x00000064` = 100 ms. |
 | `OP_JUMP` | `0x04` | 17 / 24 | UI navigation step. Parameters: jump type (`uint8`: `0` default, `1` page, `2` device, `3` sub-menu, `4` special screen), option (`uint8`: the default-jump destination for type 0, or the special-screen code for type 4), target object ID (`uint32_le`, `0xFFFFFFFF` = none), page ID (`uint32_le`, `0xFFFFFFFF` = none), transition-style string length (`uint32_le`, counting the NUL), and the style string (`"Replace"` or empty). Examples: `04 02 00 07000000 FFFFFFFF 08000000 "Replace\0"` jumps to device object 7. `04 04 0B FFFFFFFF FFFFFFFF …` opens special screen 11 (off-site). `04 04 12 …` opens special screen 18 (sleep timer). `04 04 60 …` opens special screen 96 (room EQ) `[CONFIRMED]` (layout) / `[STATIC]` (enumerations). The controller does not execute a jump itself; it forwards the jump to the client that triggered the macro `[STATIC]`. `core_model.json` step type `4` uses the same enumeration (`53-client-protocols` §3.4.4). |
+| `OP_SET_VARIABLE` | `0x08` | 8 + $L$ | Variable-set step: variable ID (`uint32_le`), variable type (`uint8`, as Table 8), value length $L$ (`uint8`), value bytes ($L$). Boolean: $L = 1$; value `0` clears, `1` sets, any other byte toggles the state `[CONFIRMED]`. Integer: $L$ MUST equal the variable's stored value length (4); a different length is rejected and the value is unchanged `[STATIC]`. String: the value replaces the stored text and length `[STATIC]`. A step whose ID is unknown or whose type differs from the stored type is ignored `[STATIC]`. Example record: `09 00 00 00 01 08 15 00 00 00 00 01 01` sets Boolean variable 21 to 1 `[CONFIRMED]`. |
 | `OP_DEV_CMD` | `0x21` | 44 | Device command step: target device ID (`uint32_le`), target command ID (`uint32_le`), repeat count, delay interval. |
 | `OP_ZONE_CMD` | `0x35` | 11 | Zone audio control step: target zone ID, volume level or mute toggle. |
 | `OP_ROOM_OFF` | `0x36` | 11 | Room power-off step: sub-type (`uint8`, `0x00` observed), room ID (`uint32_le`), then `uint32_le` `0xFFFFFFFF` (meaning unresolved). Example: `36 00 01000000 FFFFFFFF` turns room 1 off `[CONFIRMED]` (layout). The same opcode is `core_model.json` step type `54` (`{"type": 54, "room": <id>}`) `[STATIC]`. |
-| `OP_VAR_STATE` | `0x37` | 11 | Variable / room power state mutation: sub-op `0x00` (`uint8`), variable ID (`uint32_le`), new value (`uint32_le`). Wire payload is 10 bytes (`37 00 <var_id u32> <val u32>`). |
+| `OP_DEVICE_POWER` | `0x37` | 11 | Device power step: power type (`uint8`: `0` off, `1` on), room ID (`uint32_le`), device-power command ID (`uint32_le`, an entry of that room's device power table). Used by the reference room power-on/off macros `[STATIC]`. Earlier revisions described this opcode as a variable-state step; that was wrong. Variables are set with `0x08`. |
 | `OP_JSON_BROADCAST`| `0x39` | Variable | JSON broadcast command step: flags, string length (`uint32_le`), JSON string payload (e.g. `{"type":"set","zone":{"id":"all","ctrl":{"power":"off"}}}`). |
+| `OP_DUCKING_CMD` | `0x3A` | 7 | Amplifier ducking command step: ducking event ID (`uint32_le`, a Table 6 ducking object), command (`uint8`: non-zero starts the event, `0` stops it) `[CONFIRMED]`. Example records: `07 00 00 00 01 3A 01 00 00 00 01` (start), `… 00` (stop). The controller then sends the event start or stop to the project's master amplifier `[CONFIRMED]`. |
 
 **Default-jump destinations (`OP_JUMP` type 0).** The option byte selects: `0` = return to the current/last device, `1`/`2` = previous/next page, `3`/`4` = previous/next navigation page, `5`/`6` = previous/next device, `7` = room main menu, `8` = room list `[STATIC]`. Values above `8` are undefined; the controller does not interpret them, and a client MUST treat them as a no-op and continue with the next step `[STATIC]`. The reference database contains no type-0 `OP_JUMP` records `[CONFIRMED]`. Type-4 special-screen codes are a separate value space (see `53-client-protocols` §3.4.4).
 
@@ -406,6 +408,50 @@ In the reference installation, Table 14 contains 4 ordered action steps:
 2. **Step 1 (`0x36` Room Trigger, 11 bytes):** Triggers room 0 power-off macro (`room_id = 0`).
 3. **Step 2 (`0x36` Room Trigger, 11 bytes):** Triggers room 1 power-off macro (`room_id = 1`).
 4. **Step 3 (`0x36` Room Trigger, 11 bytes):** Triggers room 2 power-off macro (`room_id = 2`).
+
+### 5.7 Table 6: HDA System Object and Ducking Events
+
+Table 6 begins with `uint32_le` table size and a `uint8` kind. Kind `0` is a stream-select list (not specified here). Kind `1` carries an HDA system object followed by the HDA stream table `[CONFIRMED]` (reference database):
+
+| Field | Type | Description |
+|---|---|---|
+| `hs_size` | `uint32_le` | Size of the HDA system object that follows (non-zero) |
+| Ducking table | record | `uint32_le` size (bytes after this field), `uint32_le` count, then count ducking objects. An empty table is `04 00 00 00 00 00 00 00` |
+| Paging table | record | Same framing; empty in the reference database |
+| Room-link table | record | Same framing; empty in the reference database |
+| `master_hda_id` | `uint32_le` | Connected-device ID of the master amplifier, which receives ducking and paging start/stop commands |
+| HDA stream table | record | Remainder of Table 6 |
+
+**Ducking object** (`[CONFIRMED]` layout: a generated object was parsed by the controller and the event was started and stopped through `OP_DUCKING_CMD`; field semantics `[STATIC]` unless noted):
+
+| Offset | Size | Type | Field |
+|---|---|---|---|
+| `+0x00` | 4 | `uint32_le` | Ducking event ID. It is also the event ID sent to the amplifier, which must define an event with that ID |
+| `+0x04` | 4 | `uint32_le` | Object size: bytes after this field (non-zero) |
+| `+0x08` | 2 | `uint16_le` | Name length $N$ (including NUL) |
+| `+0x0A` | $N$ | `string` | Event name |
+| $+0$ | 1 | `uint8` | Sound type: `0` = the controller plays the sound file below; non-zero = no sound `[CONFIRMED]` (non-zero) |
+| $+1$ | 1 | `uint8` | Sound loop option (`0` once, non-zero loop) |
+| $+2$ | 4 | `uint32_le` | Sound file ID (amplifier chime ID) |
+| $+6$ | 4 | `uint32_le` | Connected-device ID of the amplifier holding the sound file |
+| $+10$ | 1 | `uint8` | Sound delay, in 100 ms units |
+| $+11$ | 1 | `uint8` | Duration in seconds. `0` = active until a stop command |
+| $+12$ | 1 | `uint8` | Optional input change (`1` = selects the optional sound input) |
+| $+13$ | 1 | `uint8` | Optional sound loop option |
+| $+14$ | 4 | `uint32_le` | Optional sound / HDA stream ID (`0xFFFFFFFF` = none) |
+| $+18$ | 4 | `uint32_le` | Optional sound amplifier ID (`0xFFFFFFFF` = none) |
+| $+22$ | 1 | `uint8` | Optional sound delay, in 100 ms units |
+| $+23$ | var | button object(s) | When duration is `0`, one on-macro; otherwise an on-macro and an off-macro. Each is `uint32_le` size (non-zero, bytes after this field), `uint32_le` step count, then steps (§5.4) |
+| … | 4 | `uint32_le` | Room count $R$ |
+| … | $4R$ | `uint32_le[]` | Room IDs whose amplifier zones the event affects |
+
+Example (event 1, "Test Duck", sound type 1, duration 0, empty on-macro, room 1):
+```
+01 00 00 00 33 00 00 00 0a 00 54 65 73 74 20 44 75 63 6b 00
+01 00 00 00 00 00 02 00 00 00 00 00 00 00 ff ff ff ff ff ff ff ff 00
+04 00 00 00 00 00 00 00 01 00 00 00 01 00 00 00
+```
+Whether the event changes any zone is decided by the amplifier's own ducking configuration, which this database does not carry `[CONFIRMED]`.
 
 ---
 
